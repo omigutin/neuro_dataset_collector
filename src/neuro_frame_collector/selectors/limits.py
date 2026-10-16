@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Protocol
 
 import numpy as np
 import numpy.typing as npt
 
 from ..catalog.catalog import Catalog
-from ..config.models import DedupLimit, IntervalLimit, Limit, QuotaLimit, SceneChangeLimit
+from ..config.models import DedupLimit, IntervalLimit, LabelOverride, Limit, QuotaLimit, SceneChangeLimit
 from ..core.results import RejectReason
 from ..imaging.hashing import mean_abs_diff
 from .base import Candidate, Rejection
@@ -31,9 +31,20 @@ class LimitRule(Protocol):
 
 
 class _Interval:
-    def __init__(self, config: IntervalLimit) -> None:
+    def __init__(self, config: IntervalLimit, per_label: Mapping[str, LabelOverride]) -> None:
         self._config = config
+        self._per_label = per_label
         self._last: dict[tuple[str, ...], tuple[str, float]] = {}
+
+    def _step(self, candidate: Candidate) -> float:
+        """ Интервал: свой для класса (только в секундах) или общий. """
+        if self._config.frames is not None:
+            return float(self._config.frames)
+        override = self._per_label.get(candidate.label) if candidate.label is not None else None
+        if override is not None and override.interval_seconds is not None:
+            return override.interval_seconds
+        assert self._config.seconds is not None
+        return self._config.seconds
 
     def _key(self, candidate: Candidate) -> tuple[str, ...]:
         values = {"source": candidate.source, "region": candidate.region_id or "", "label": candidate.label or ""}
@@ -49,8 +60,7 @@ class _Interval:
         last = self._last.get(self._key(candidate))
         if last is None or last[0] != candidate.source:
             return None
-        step = self._config.frames if self._config.frames is not None else self._config.seconds
-        assert step is not None
+        step = self._step(candidate)
         passed = self._position(candidate) - last[1]
         if 0 <= passed < step:
             unit = "кадров" if self._config.frames is not None else "с"
@@ -130,14 +140,18 @@ class _SceneChange:
         self._last[candidate.stream_key] = candidate.small
 
 
-def build_limits(configs: Sequence[Limit], catalog: Catalog, collection: str, dedup_collection: str | None) -> list[
-    LimitRule
-]:
-    """ Создаёт правила-ограничения по настройкам. """
+def build_limits(
+    configs: Sequence[Limit],
+    catalog: Catalog,
+    collection: str,
+    dedup_collection: str | None,
+    per_label: Mapping[str, LabelOverride] | None = None,
+) -> list[LimitRule]:
+    """ Создаёт правила-ограничения по настройкам; per_label — особые интервалы по классам. """
     rules: list[LimitRule] = []
     for config in configs:
         if isinstance(config, IntervalLimit):
-            rules.append(_Interval(config))
+            rules.append(_Interval(config, per_label or {}))
         elif isinstance(config, DedupLimit):
             rules.append(DedupRule(config, catalog, dedup_collection))
         elif isinstance(config, QuotaLimit):

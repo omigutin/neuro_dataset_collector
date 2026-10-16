@@ -45,6 +45,8 @@ auto:
     - {type: scene_change, min_diff: 6}        # картинка заметно изменилась с прошлого сохранения
     - {type: quota, per_label: 2000}           # не больше 2000 кадров на класс
     - {type: dedup, threshold: 5}              # без почти одинаковых картинок
+  per_label: {}                                # свои правила для классов, например
+                                               # {EMPTY: {enabled: false}, FULL: {max_conf: 0.9, interval_seconds: 5}}
 
 # Проверка последовательности ответов модели (только классификация).
 consistency:

@@ -1,6 +1,6 @@
 [project]
 name = "neuro-frame-collector"
-version = "0.1.0"
+version = "0.1.1"
 description = "Сбор и раскладка кадров из видео для обучения нейросетей: по правилам, вручную и с историей."
 readme = "README.md"
 license = "MIT"

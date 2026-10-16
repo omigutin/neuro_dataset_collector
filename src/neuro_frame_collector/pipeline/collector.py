@@ -89,8 +89,9 @@ class Collector:
         self._writer = FileWriter(config.runtime.async_write, config.runtime.queue_size)
         self._disk = DiskGuard(config.catalog.root, config.storage.min_free_gb)
         dedup_collection = collection if config.catalog.dedup_scope == DedupScope.COLLECTION else None
-        self._triggers = build_triggers(config.auto.triggers)
-        self._limits = build_limits(config.auto.limits, self._catalog, collection, dedup_collection)
+        self._triggers = build_triggers(config.auto.triggers, config.auto.per_label)
+        self._limits = build_limits(config.auto.limits, self._catalog, collection, dedup_collection,
+                                    config.auto.per_label)
         dedup_threshold = next((lim.threshold for lim in config.auto.limits if isinstance(lim, DedupLimit)), 5)
         self._dedup = DedupRule(DedupLimit(threshold=dedup_threshold), self._catalog, dedup_collection)
         self._consistency: StreamConsistency[_Pending] | None = None
@@ -183,7 +184,7 @@ class Collector:
                 results.append(self._save_flagged(pending, model_label, reference_label, FlipAction.SUSPECT,
                                                   f"модель: {model_label}, программа: {reference_label}"))
             else:
-                trigger = first_trigger(self._triggers, candidate)
+                trigger = first_trigger(self._triggers, candidate) if self._label_enabled(candidate) else None
                 if trigger is not None:
                     rejection = self._runtime_rejection(auto=True) or check_limits(self._limits, candidate)
                     if rejection is not None:
@@ -348,6 +349,12 @@ class Collector:
             predictions=local,
         )
         return _Pending(candidate, frame, zone, crop)
+
+    def _label_enabled(self, candidate: Candidate) -> bool:
+        """ Разрешён ли автосбор для класса кандидата (настройка auto.per_label, только классификация). """
+        if self._config.task != TaskType.CLASSIFY:
+            return True
+        return self._config.auto.is_label_enabled(candidate.label or self._config.unsorted_label)
 
     def _runtime_rejection(self, auto: bool) -> Rejection | None:
         """ Ограничения режима работы: свободное место и лимит в час (только для автосбора). """

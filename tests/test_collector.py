@@ -202,3 +202,26 @@ def test_catalog_survives_restart(make_config: ConfigFactory, tmp_path: Path) ->
         stats = collector.stats()
     assert again.reason == RejectReason.DUPLICATE
     assert stats.total_by_label == {"FULL": 1}
+
+
+def test_per_label_overrides(make_config: ConfigFactory) -> None:
+    config = make_config(
+        auto={
+            "triggers": [{"type": "confidence", "max": 0.8}],
+            "limits": [{"type": "interval", "seconds": 1.0}],
+            "per_label": {"EMPTY": {"enabled": False}, "FULL": {"max_conf": 0.95, "interval_seconds": 5}},
+        }
+    )
+    with Collector(config) as collector:
+        assert collector.offer(make_frame(1, index=0), [Prediction("EMPTY", 0.1)]) == []
+        assert collector.offer(make_frame(2, index=1), [Prediction("FULL", 0.9)])[0].ok
+        too_soon = collector.offer(make_frame(3, index=30), [Prediction("FULL", 0.9)])[0]
+        later = collector.offer(make_frame(4, index=60), [Prediction("FULL", 0.9)])[0]
+        unknown = collector.offer(make_frame(5, index=61), [Prediction("UNKNOWN", 0.9)])
+    assert too_soon.reason == RejectReason.INTERVAL and later.ok
+    assert unknown == []
+
+
+def test_per_label_unknown_class_rejected(make_config: ConfigFactory) -> None:
+    with pytest.raises(ValueError):
+        make_config(auto={"per_label": {"NOPE": {"enabled": False}}})

@@ -19,7 +19,7 @@ from .export import export_dataset
 from .pipeline import Collector, CollectorStats, OfflineReport, collect_videos
 from .review import sync_collection
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     "BBox",

@@ -21,6 +21,7 @@ __all__ = [
     "DuplicatePolicy",
     "ImageFormat",
     "IntervalLimit",
+    "LabelOverride",
     "Limit",
     "ManualConfig",
     "ModelConfig",
@@ -229,12 +230,39 @@ def _default_limits() -> list[Limit]:
     return [IntervalLimit(seconds=1.0), DedupLimit()]
 
 
+class LabelOverride(_Model):
+    """
+        Особые правила автоотбора для одного класса.
+        enabled=false — не сохранять этот класс автоматически;
+        min_conf / max_conf — свой диапазон уверенности для повода confidence;
+        interval_seconds — свой интервал для ограничения interval (в секундах).
+    """
+
+    enabled: bool = True
+    min_conf: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_conf: float | None = Field(default=None, ge=0.0, le=1.0)
+    interval_seconds: float | None = Field(default=None, gt=0.0)
+
+    @model_validator(mode="after")
+    def _check_range(self) -> LabelOverride:
+        """ Нижняя граница не больше верхней. """
+        if self.min_conf is not None and self.max_conf is not None and self.min_conf > self.max_conf:
+            raise ValueError("per_label: min_conf must be <= max_conf")
+        return self
+
+
 class AutoConfig(_Model):
-    """ Автоматический отбор: поводы сохранить (любой) и ограничения (все). """
+    """ Автоматический отбор: поводы сохранить (любой) и ограничения (все), плюс особые правила по классам. """
 
     enabled: bool = True
     triggers: list[Trigger] = Field(default_factory=_default_triggers)
     limits: list[Limit] = Field(default_factory=_default_limits)
+    per_label: dict[str, LabelOverride] = Field(default_factory=dict)
+
+    def is_label_enabled(self, label: str | None) -> bool:
+        """ Разрешён ли автосбор для класса (None — без класса). """
+        override = self.per_label.get(label) if label is not None else None
+        return override is None or override.enabled
 
 
 class ConsistencyConfig(_Model):
@@ -355,6 +383,7 @@ class CollectorConfig(_Model):
         if not known:
             return self
         referenced: list[str] = list(self.manual.keys.values()) + list(self.consistency.review_always)
+        referenced.extend(name for name in self.auto.per_label if name != self.unsorted_label)
         for source, targets in self.consistency.trusted_flips.items():
             referenced.append(source)
             referenced.extend(targets)
