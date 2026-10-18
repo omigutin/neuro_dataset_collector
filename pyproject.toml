@@ -1,6 +1,6 @@
 [project]
-name = "neuro-frame-collector"
-version = "0.1.1"
+name = "neuro-dataset-collector"
+version = "0.2.0"
 description = "Сбор и раскладка кадров из видео для обучения нейросетей: по правилам, вручную и с историей."
 readme = "README.md"
 license = "MIT"
@@ -29,11 +29,11 @@ headless = ["opencv-python-headless>=4.8"]
 web = ["fastapi>=0.110", "uvicorn>=0.27"]
 
 [project.scripts]
-nfc = "neuro_frame_collector.cli.main:main"
+ndc = "neuro_dataset_collector.cli.main:main"
 
 [tool.poetry]
-packages = [{ include = "neuro_frame_collector", from = "src" }]
-include = [{ path = "src/neuro_frame_collector/web/static/*", format = ["sdist", "wheel"] }]
+packages = [{ include = "neuro_dataset_collector", from = "src" }]
+include = [{ path = "src/neuro_dataset_collector/web/static/*", format = ["sdist", "wheel"] }]
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=8.0"
@@ -72,4 +72,4 @@ python_version = "3.12"
 plugins = ["pydantic.mypy"]
 strict = true
 ignore_missing_imports = true
-files = ["src/neuro_frame_collector"]
+files = ["src/neuro_dataset_collector"]

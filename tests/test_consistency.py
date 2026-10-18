@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from neuro_frame_collector.config import ConsistencyConfig
-from neuro_frame_collector.consistency import FlipAction, StreamConsistency
+from neuro_dataset_collector.config import ConsistencyConfig
+from neuro_dataset_collector.consistency import FlipAction, StreamConsistency
 
 KEY = ("v", "1")
 

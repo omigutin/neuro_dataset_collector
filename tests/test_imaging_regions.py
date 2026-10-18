@@ -7,10 +7,15 @@ import numpy as np
 import pytest
 
 from conftest import random_image
-from neuro_frame_collector.config import RegionsConfig
-from neuro_frame_collector.core import BBox, Prediction, Region
-from neuro_frame_collector.imaging import crop_region, dhash, hamming_many, predictions_to_crop
-from neuro_frame_collector.regions import FullFrameRegions, LabelMeRegions, create_region_provider
+from neuro_dataset_collector.config import RegionsConfig
+from neuro_dataset_collector.core import BBox, Prediction, Region
+from neuro_dataset_collector.imaging import crop_region, dhash, hamming_many, predictions_to_crop
+from neuro_dataset_collector.regions import (
+    FullFrameRegions,
+    LabelMeRegions,
+    create_region_provider,
+    suggest_regions_file,
+)
 
 
 def test_crop_full_frame_when_no_region() -> None:
@@ -101,8 +106,8 @@ def test_missing_file_falls_back(tmp_path: Path) -> None:
 
 
 def test_yolo_segment_and_unknown_label() -> None:
-    from neuro_frame_collector.config import TaskType
-    from neuro_frame_collector.storage import yolo_lines
+    from neuro_dataset_collector.config import TaskType
+    from neuro_dataset_collector.storage import yolo_lines
 
     predictions = [
         Prediction("B", 0.9, polygon=((0, 0), (10, 0), (10, 10))),
@@ -115,7 +120,7 @@ def test_yolo_segment_and_unknown_label() -> None:
 
 
 def test_hash_index_grow_and_remove() -> None:
-    from neuro_frame_collector.catalog import HashIndex
+    from neuro_dataset_collector.catalog import HashIndex
 
     index = HashIndex(capacity=2)
     for i in range(5):
@@ -124,3 +129,17 @@ def test_hash_index_grow_and_remove() -> None:
     index.remove(4)
     assert len(index) == 4 and index.nearest(4)[0] != 4
     assert HashIndex().nearest(1) is None
+
+
+def test_labelme_labels_case_insensitive(tmp_path: Path) -> None:
+    provider = LabelMeRegions(_labelme(tmp_path), labels=["CROP"], id_field="wz")
+    assert [r.id for r in provider.regions(200, 100)] == ["1", "2", "3"]
+
+
+def test_suggest_regions_file(tmp_path: Path) -> None:
+    for name in ["norebo_cam25.json", "norebo_cam2.json", "norebo_cam250.json", "other.json"]:
+        (tmp_path / name).write_text("{}", encoding="utf-8")
+    assert suggest_regions_file(Path("ml_cam25_22092026_1315.avi"), tmp_path) == tmp_path / "norebo_cam25.json"
+    assert suggest_regions_file(Path("ml_cam2_x.avi"), tmp_path) == tmp_path / "norebo_cam2.json"
+    assert suggest_regions_file(Path("ml_cam7_x.avi"), tmp_path) is None
+    assert suggest_regions_file(Path("no_camera.avi"), tmp_path) is None

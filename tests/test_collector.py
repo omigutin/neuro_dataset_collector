@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 from conftest import make_frame
-from neuro_frame_collector import Collector, CollectorConfig, Prediction, RejectReason, SampleStatus
-from neuro_frame_collector.core import BBox, Region
+from neuro_dataset_collector import Collector, CollectorConfig, Prediction, RejectReason, SampleStatus
+from neuro_dataset_collector.core import BBox, Region
 
 ConfigFactory = Callable[..., CollectorConfig]
 

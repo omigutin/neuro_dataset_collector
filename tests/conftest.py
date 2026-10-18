@@ -8,8 +8,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from neuro_frame_collector.config import CollectorConfig
-from neuro_frame_collector.core import Frame
+from neuro_dataset_collector.config import CollectorConfig
+from neuro_dataset_collector.core import Frame
 
 
 @pytest.fixture

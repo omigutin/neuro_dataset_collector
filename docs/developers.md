@@ -1,20 +1,20 @@
 # Подключение к своей программе
 
-Ядро библиотеки не зависит от веб-интерфейса: `import neuro_frame_collector` не тянет FastAPI.
+Ядро библиотеки не зависит от веб-интерфейса: `import neuro_dataset_collector` не тянет FastAPI.
 
 ## Установка в проект
 
 ```bash
-poetry add neuro-frame-collector          # OpenCV уже есть в проекте
-poetry add "neuro-frame-collector[headless]"  # если OpenCV нет
+poetry add neuro-dataset-collector          # OpenCV уже есть в проекте
+poetry add "neuro-dataset-collector[headless]"  # если OpenCV нет
 ```
 
 ## Минимальный пример
 
 ```python
-from neuro_frame_collector import Collector, Frame, Prediction, load_config
+from neuro_dataset_collector import Collector, Frame, Prediction, load_config
 
-config = load_config("nfc.yaml")
+config = load_config("ndc.yaml")
 with Collector(config) as collector:
     for index, image in enumerate(frames):            # image — numpy BGR, как у OpenCV
         frame = Frame(image=image, source="cam7_20260101", index=index, timestamp=index / fps)
@@ -26,7 +26,7 @@ with Collector(config) as collector:
 ## Зоны от программы
 
 ```python
-from neuro_frame_collector import BBox, Region
+from neuro_dataset_collector import BBox, Region
 
 regions = [
     Region.from_bbox("1", BBox(100, 50, 400, 350), {"position": "left"}),
@@ -92,7 +92,7 @@ collector.offer(frame, predictions, reference_label=fsm_state_name)
 ## Сверка, выгрузка, история
 
 ```python
-from neuro_frame_collector import Catalog, export_dataset, sync_collection
+from neuro_dataset_collector import Catalog, export_dataset, sync_collection
 
 report = sync_collection(config)         # после ручной проверки
 print(report.summary())
@@ -106,7 +106,7 @@ with Catalog(config.catalog.root) as catalog:
 ## Офлайн-нарезка своей моделью
 
 ```python
-from neuro_frame_collector import collect_videos
+from neuro_dataset_collector import collect_videos
 
 def predictor(image):                    # любая модель: картинка → список Prediction
     return [Prediction("FULL", 0.7)]
@@ -118,4 +118,4 @@ print(report.summary())
 
 ## Логи
 
-Библиотека пишет в журнал `logging.getLogger("neuro_frame_collector")`.
+Библиотека пишет в журнал `logging.getLogger("neuro_dataset_collector")`.

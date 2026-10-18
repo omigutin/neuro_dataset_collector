@@ -1,4 +1,4 @@
-# neuro_frame_collector
+# neuro_dataset_collector
 
 Сбор и раскладка кадров из видео для обучения нейросетей: вручную по клавишам, автоматически по правилам,
 с историей каждого кадра.
@@ -16,7 +16,7 @@
 ## Установка
 
 ```bash
-pip install "neuro-frame-collector[web,opencv]"
+pip install "neuro-dataset-collector[web,opencv]"
 ```
 
 `opencv` / `headless` — если OpenCV ещё не установлен; `web` — веб-интерфейс.
@@ -24,17 +24,18 @@ pip install "neuro-frame-collector[web,opencv]"
 ## Быстро
 
 ```bash
-nfc init nfc.yaml      # файл настроек с пояснениями
-nfc web -c nfc.yaml    # веб-интерфейс
-nfc collect -c nfc.yaml
-nfc sync -c nfc.yaml
-nfc export -c nfc.yaml -o export/
+python run.py          # веб-интерфейс из папки проекта (открывает прошлый сеанс)
+ndc init ndc.yaml      # файл настроек с пояснениями
+ndc web -c ndc.yaml    # веб-интерфейс
+ndc collect -c ndc.yaml
+ndc sync -c ndc.yaml
+ndc export -c ndc.yaml -o export/
 ```
 
 ```python
-from neuro_frame_collector import Collector, Frame, Prediction, load_config
+from neuro_dataset_collector import Collector, Frame, Prediction, load_config
 
-with Collector(load_config("nfc.yaml")) as collector:
+with Collector(load_config("ndc.yaml")) as collector:
     results = collector.offer(Frame(image, "cam1", index, timestamp), [Prediction("FULL", 0.6)])
 ```
 

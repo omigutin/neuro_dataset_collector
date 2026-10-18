@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Сборщик датасета</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Сборщик датасета</h1>
+  <nav>
+    <button class="tab active" data-tab="slicer">Нарезка</button>
+    <button class="tab" data-tab="settings">Настройки</button>
+    <button class="tab" data-tab="summary">Итог</button>
+  </nav>
+  <span id="config-path" class="muted"></span>
+</header>
+
+<main>
+  <!-- ======================= Нарезка ======================= -->
+  <section id="tab-slicer" class="panel active">
+    <div class="card sources">
+      <div class="source-row">
+        <span class="source-label">Видео</span>
+        <span id="video-path" class="path muted">не выбрано</span>
+        <button id="pick-video" class="primary">Выбрать видео…</button>
+      </div>
+      <div class="source-row">
+        <span class="source-label">Зоны</span>
+        <span id="regions-path" class="path muted">весь кадр</span>
+        <button id="pick-regions">Файл разметки…</button>
+        <button id="no-regions" title="Сохранять кадр целиком">Весь кадр</button>
+      </div>
+      <div class="source-row">
+        <span class="source-label">Датасет</span>
+        <span id="dataset-path" class="path muted"></span>
+      </div>
+    </div>
+    <div class="slicer">
+      <div class="viewer">
+        <img id="frame" alt="">
+        <div id="frame-placeholder" class="placeholder">Выберите видео</div>
+        <div class="controls">
+          <button id="prev" title="← шаг назад">⏮</button>
+          <button id="play" title="Пробел">▶</button>
+          <button id="next" title="→ шаг вперёд">⏭</button>
+          <input type="range" id="seek" min="0" value="0">
+          <input type="number" id="frame-number" min="0" class="short">
+          <select id="speed" title="Скорость">
+            <option value="0.5">×0.5</option><option value="1" selected>×1</option>
+            <option value="2">×2</option><option value="4">×4</option><option value="8">×8</option>
+          </select>
+          <label class="check"><input type="checkbox" id="step-mode"> пошагово</label>
+        </div>
+        <div id="video-info" class="muted"></div>
+        <div id="zones" class="row"></div>
+        <div id="legend" class="legend"></div>
+      </div>
+      <aside>
+        <div class="card">
+          <h2>Автонарезка по правилам</h2>
+          <div class="row">
+            <button id="auto-start" class="primary">Запустить</button>
+            <button id="auto-stop">Остановить</button>
+          </div>
+          <div id="auto-status" class="muted"></div>
+        </div>
+        <div class="card">
+          <h2>Последние действия</h2>
+          <ul id="history"></ul>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ======================= Настройки ======================= -->
+  <section id="tab-settings" class="panel">
+    <div class="card">
+      <h2>Файл настроек</h2>
+      <div class="row">
+        <span id="settings-file" class="path"></span>
+        <button id="open-config">Открыть другой…</button>
+        <button id="save-config-as">Сохранить как…</button>
+      </div>
+      <p class="hint">Настройки и открытое видео запоминаются: при следующем запуске всё откроется как было.</p>
+    </div>
+
+    <form id="settings-form" autocomplete="off" novalidate>
+      <div class="grid">
+        <div class="card">
+          <h2>Задача и классы</h2>
+          <label>Для чего собираем
+            <select name="task">
+              <option value="classify">Классификация (кадры по папкам классов)</option>
+              <option value="detect">Детекция (картинки + боксы YOLO)</option>
+              <option value="segment">Сегментация (картинки + контуры YOLO)</option>
+            </select>
+          </label>
+          <table class="names">
+            <thead><tr><th>Класс</th><th>Клавиша</th><th></th></tr></thead>
+            <tbody id="classes-body"></tbody>
+          </table>
+          <button type="button" id="add-class" class="add">+ Добавить класс</button>
+          <p class="hint">Латиница, цифры, «_» и «-»; буквы становятся заглавными. Клавиша — цифра или латинская буква.</p>
+          <label>Клавиша «сохранить без класса» <input name="save_all_key" maxlength="1" class="short key"></label>
+          <label>Если кадр похож на сохранённый
+            <select name="on_duplicate">
+              <option value="reject">не сохранять и показать похожий</option>
+              <option value="warn">сохранить, но предупредить</option>
+              <option value="allow">сохранять молча</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="card">
+          <h2>Куда сохранять</h2>
+          <label class="check"><input type="checkbox" name="next_to_video">
+            рядом с видео — папка «<i>имя видео</i>_dataset»</label>
+          <label>Или своя папка
+            <span class="row"><input name="root"><button type="button" data-pick="dir" data-target="root">Выбрать…</button></span>
+          </label>
+          <label>Подпапка внутри (можно оставить пустой) <input name="collection" placeholder="например, norebo/ML"></label>
+          <label>Искать похожие кадры
+            <select name="dedup_scope">
+              <option value="collection">в этой папке</option>
+              <option value="catalog">во всём каталоге</option>
+            </select>
+          </label>
+          <label>Имя файла <input name="filename"></label>
+          <p class="hint">Поля: {source} {region} {frame:06d} {label} {conf} {mode} {date} {time}</p>
+          <p class="hint">Повторная нарезка того же видео ничего не затирает: имена уникальны, похожие кадры отклоняются.</p>
+        </div>
+
+        <div class="card">
+          <h2>Зоны</h2>
+          <label>Что вырезать
+            <select name="regions_source">
+              <option value="none">весь кадр</option>
+              <option value="file">зоны из файла разметки (LabelMe json)</option>
+            </select>
+          </label>
+          <p class="hint">Файл разметки выбирается на вкладке «Нарезка» для каждого видео.</p>
+          <label>Папка с файлами разметки (подсказка по номеру камеры)
+            <span class="row"><input name="regions_search_dir"><button type="button" data-pick="dir" data-target="regions_search_dir">Выбрать…</button></span>
+          </label>
+          <p class="hint">Для видео «…cam25…» будет предложен файл «…cam25….json» из этой папки.</p>
+          <table class="names">
+            <thead><tr><th>Метки фигур (пусто — все)</th><th></th></tr></thead>
+            <tbody id="labels-body"></tbody>
+          </table>
+          <button type="button" id="add-label" class="add">+ Добавить метку</button>
+          <label>Поле с номером зоны <input name="regions_id_field" placeholder="например, wz"></label>
+          <label class="check"><input type="checkbox" name="mask_outside"> закрасить всё вне многоугольника</label>
+          <label>Отступ вокруг зоны, пикс. <input type="number" name="padding" min="0" class="short"></label>
+        </div>
+
+        <div class="card">
+          <h2>Видео и модель</h2>
+          <label>Шаг: показывать каждый N-й кадр <input type="number" name="step" min="1" class="short"></label>
+          <label>Модель для автонарезки (ultralytics .pt, по желанию)
+            <span class="row"><input name="model_path"><button type="button" data-pick="file" data-filter="model" data-target="model_path">Выбрать…</button></span>
+          </label>
+        </div>
+
+        <div class="card">
+          <h2>Автоотбор: поводы сохранить (любой)</h2>
+          <label class="check"><input type="checkbox" name="auto_enabled"> автоотбор включён</label>
+          <label class="check"><input type="checkbox" name="t_always"> каждый кадр (первый сбор без модели)</label>
+          <label class="check"><input type="checkbox" name="t_conf"> модель сомневается: уверенность от
+            <input type="number" step="0.01" min="0" max="1" name="t_conf_min" class="short"> до
+            <input type="number" step="0.01" min="0" max="1" name="t_conf_max" class="short"></label>
+          <label class="check"><input type="checkbox" name="t_audit"> случайная проверка, доля
+            <input type="number" step="0.01" min="0" max="1" name="t_audit_rate" class="short"></label>
+          <h2>Ограничения (все)</h2>
+          <label class="check"><input type="checkbox" name="l_interval"> не чаще раза в
+            <input type="number" step="0.1" min="0.1" name="l_interval_sec" class="short"> с</label>
+          <label class="check"><input type="checkbox" name="l_scene"> картинка изменилась минимум на
+            <input type="number" step="0.5" min="0" name="l_scene_diff" class="short"> (0–255)</label>
+          <label class="check"><input type="checkbox" name="l_quota"> не больше
+            <input type="number" min="1" name="l_quota_n" class="short"> кадров на класс</label>
+          <label class="check"><input type="checkbox" name="l_dedup"> без дублей, порог
+            <input type="number" min="0" max="64" name="l_dedup_t" class="short"> (из 64)</label>
+        </div>
+
+        <div class="card">
+          <h2>Проверка последовательности</h2>
+          <p class="hint">Только для классификации с моделью. Короткий «выброс» другого класса среди устойчивого
+            уходит в папку «_suspect» для ручной проверки.</p>
+          <label class="check"><input type="checkbox" name="cons_enabled"> включить</label>
+          <label>Устойчивых ответов до и после <input type="number" min="1" name="cons_context" class="short"></label>
+          <label>Выброс не длиннее, кадров <input type="number" min="1" name="cons_max_run" class="short"></label>
+          <div id="review-always" class="chips"></div>
+          <p class="hint">Отмеченные классы только для ручного решения (никогда не исправляются автоматически).</p>
+          <h2>Режим</h2>
+          <label>Профиль
+            <select name="profile">
+              <option value="dev">разработка</option>
+              <option value="production">боевой сервер (бережный)</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div class="row sticky">
+        <button type="submit" class="primary">Сохранить настройки</button>
+        <span id="settings-status"></span>
+      </div>
+    </form>
+
+    <details class="card">
+      <summary>Все настройки текстом (YAML)</summary>
+      <textarea id="yaml" rows="24" spellcheck="false"></textarea>
+      <div class="row"><button id="apply-yaml">Применить YAML</button></div>
+    </details>
+    <div id="settings-errors" class="errors"></div>
+  </section>
+
+  <!-- ======================= Итог ======================= -->
+  <section id="tab-summary" class="panel">
+    <div class="grid">
+      <div class="card">
+        <h2>Сколько собрано</h2>
+        <div id="stats"></div>
+        <button id="refresh-stats">Обновить</button>
+      </div>
+      <div class="card">
+        <h2>Сверка после проверки</h2>
+        <p>1. Откройте папку датасета и просмотрите кадры глазами.<br>
+           2. Неверные перенесите в папку правильного класса, мусор удалите.<br>
+           3. Нажмите «Сверить» — всё, что лежит в папках классов, будет считаться проверенным.</p>
+        <button id="sync" class="primary">Сверить</button>
+        <pre id="sync-result"></pre>
+      </div>
+      <div class="card">
+        <h2>Выгрузка (для Roboflow)</h2>
+        <label>Папка выгрузки
+          <span class="row"><input id="export-dir"><button type="button" data-pick="dir" data-target-id="export-dir">Выбрать…</button></span>
+        </label>
+        <label class="check"><input type="checkbox" id="export-all"> включая выгруженные ранее</label>
+        <label class="check"><input type="checkbox" id="export-pending"> включая непроверенные</label>
+        <button id="export" class="primary">Выгрузить</button>
+        <pre id="export-result"></pre>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- Запасной выбор файла в браузере (если системное окно недоступно) -->
+<dialog id="picker">
+  <div class="row"><strong id="picker-path"></strong></div>
+  <ul id="picker-list"></ul>
+  <div class="row">
+    <button id="picker-up">Вверх</button>
+    <button id="picker-choose-dir">Выбрать эту папку</button>
+    <button id="picker-cancel">Отмена</button>
+  </div>
+</dialog>
+<div id="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

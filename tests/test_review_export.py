@@ -9,7 +9,7 @@ import pytest
 import yaml
 
 from conftest import make_frame, random_image
-from neuro_frame_collector import (
+from neuro_dataset_collector import (
     Collector,
     CollectorConfig,
     Prediction,
@@ -18,10 +18,10 @@ from neuro_frame_collector import (
     export_dataset,
     sync_collection,
 )
-from neuro_frame_collector.catalog import Catalog
-from neuro_frame_collector.cli.main import main
-from neuro_frame_collector.config import save_config
-from neuro_frame_collector.core import BBox
+from neuro_dataset_collector.catalog import Catalog
+from neuro_dataset_collector.cli.main import main
+from neuro_dataset_collector.config import save_config
+from neuro_dataset_collector.core import BBox
 
 ConfigFactory = Callable[..., CollectorConfig]
 
@@ -149,7 +149,7 @@ def test_cli_end_to_end(make_config: ConfigFactory, tmp_path: Path, capsys: pyte
     video = _write_video(tmp_path / "cam1.avi", frames=10)
     config = make_config(auto={"triggers": [{"type": "always"}], "limits": [{"type": "dedup"}]},
                          source={"path": str(video), "step": 1})
-    cfg = tmp_path / "nfc.yaml"
+    cfg = tmp_path / "ndc.yaml"
     save_config(config, cfg)
     assert main(["collect", "-c", str(cfg)]) == 0
     unsorted = config.collection_dir / "_unsorted"
