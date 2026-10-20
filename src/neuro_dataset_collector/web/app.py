@@ -20,7 +20,7 @@ from pydantic import BaseModel, ValidationError
 
 from ..config.models import NAME_PATTERN, dataset_dir_for_video
 from .picker import pick_path
-from .session import WebSession
+from .session import AutoScope, WebSession
 
 __all__ = ["create_app", "run"]
 
@@ -50,6 +50,18 @@ class PickRequest(BaseModel):
     filter: str = "any"
     initial: str | None = None
     title: str = ""
+
+
+class RegionsEditRequest(BaseModel):
+    """ Исправленные зоны: номер зоны → точки контура в координатах кадра. """
+
+    regions: dict[str, list[tuple[float, float]]]
+
+
+class AutoRequest(BaseModel):
+    """ Запуск автонарезки: открытое видео или весь плейлист. """
+
+    scope: AutoScope = "video"
 
 
 class ExportRequest(BaseModel):
@@ -184,17 +196,45 @@ def create_app(session: WebSession) -> FastAPI:
         result: dict[str, Any] = _call(lambda: session.set_regions_file(Path(path) if path else None))
         return result
 
+    @app.post("/api/video/regions/edit")
+    def edit_regions(request: RegionsEditRequest) -> dict[str, Any]:
+        result: dict[str, Any] = _call(lambda: session.edit_regions(
+            {region_id: [(x, y) for x, y in points] for region_id, points in request.regions.items()}))
+        return result
+
+    @app.get("/api/video/regions/save-target")
+    def regions_save_target() -> dict[str, str | None]:
+        target = session.regions_save_target()
+        return {"path": str(target) if target else None}
+
+    @app.post("/api/video/regions/save-as")
+    def save_regions_as(path: str = Body(..., embed=True)) -> dict[str, str]:
+        return {"path": str(_call(lambda: session.save_regions_as(Path(path))))}
+
+    # ---- плейлист ----
+
+    @app.get("/api/playlist")
+    def playlist() -> dict[str, Any]:
+        result: dict[str, Any] = _call(session.playlist)
+        return result
+
+    @app.post("/api/playlist")
+    def set_playlist(path: str | None = Body(None, embed=True)) -> dict[str, Any]:
+        result: dict[str, Any] = _call(lambda: session.set_playlist(Path(path) if path else None))
+        return result
+
     @app.post("/api/video/position")
     def remember_frame(frame: int = Body(..., embed=True)) -> dict[str, int]:
         session.remember_frame(frame)
         return {"frame": session.frame}
 
     @app.get("/api/video/frame/{index}")
-    def video_frame(index: int) -> Response:
+    def video_frame(index: int, zones: bool = Query(True)) -> Response:
         frame = _call(lambda: session.frame_at(index))
         if frame is None:
             raise HTTPException(404, {"errors": ["End of video"]})
-        return Response(session.render(frame), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+        return Response(session.render(frame, zones=zones), media_type="image/jpeg",
+                        headers={"Cache-Control": "no-store"})
 
     @app.post("/api/save")
     def save(request: SaveRequest) -> dict[str, Any]:
@@ -212,8 +252,9 @@ def create_app(session: WebSession) -> FastAPI:
     # ---- автонарезка, сверка, выгрузка ----
 
     @app.post("/api/auto/start")
-    def auto_start() -> dict[str, Any]:
-        _call(session.start_auto)
+    def auto_start(request: AutoRequest | None = Body(None)) -> dict[str, Any]:
+        scope: AutoScope = request.scope if request is not None else "video"
+        _call(lambda: session.start_auto(scope))
         return asdict(session.auto_state())
 
     @app.post("/api/auto/stop")

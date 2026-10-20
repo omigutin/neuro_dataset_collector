@@ -1,4 +1,4 @@
-""" Запоминание прошлого сеанса веб-инструмента: файл настроек, видео, кадр. """
+""" Запоминание прошлого сеанса веб-инструмента: файл настроек, папка плейлиста, видео, кадры. """
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 __all__ = ["SessionState", "app_dir", "default_config_path", "load_state", "save_state"]
 
@@ -22,8 +22,11 @@ class SessionState(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     config_path: str | None = None
+    playlist_dir: str | None = None
     video: str | None = None
     frame: int = 0
+    # Последний кадр каждого видео: при возврате к видео продолжаем с того же места.
+    positions: dict[str, int] = Field(default_factory=dict)
 
 
 def app_dir() -> Path:

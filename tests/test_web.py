@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -163,3 +164,76 @@ def test_browse_and_pick_fallback(client: TestClient, workspace: Path, monkeypat
     assert client.post("/api/pick", json={"kind": "file", "filter": "video"}).json() == {"path": "", "available": False}
     monkeypatch.setattr(app_module, "pick_path", lambda *args: "C:/video.avi")
     assert client.post("/api/pick", json={"kind": "file"}).json() == {"path": "C:/video.avi", "available": True}
+
+
+def test_edit_regions_saved_next_to_video_and_used_first(client: TestClient, workspace: Path) -> None:
+    video = workspace / "ml_cam25_0101.avi"
+    original = (workspace / "jsons" / "norebo_cam25.json").read_text(encoding="utf-8")
+    info = client.post("/api/video/open", json={"path": str(video)}).json()
+    assert info["regions_origin"] == "camera" and info["regions_editable"] is True
+    assert [r["shape"] for r in info["regions"]] == ["rectangle", "rectangle"]
+    box = [[2, 2], [30, 2], [30, 20], [2, 20]]
+    edited = client.post("/api/video/regions/edit", json={"regions": {"1": box}}).json()
+    sidecar = workspace / "ml_cam25_0101.json"
+    assert edited["regions_file"] == str(sidecar) and edited["regions_origin"] == "video"
+    assert edited["regions"][0]["polygon"][0] == [2.0, 2.0]
+    assert json.loads(sidecar.read_text(encoding="utf-8"))["shapes"][0]["points"] == [[2.0, 2.0], [30.0, 20.0]]
+    assert (workspace / "jsons" / "norebo_cam25.json").read_text(encoding="utf-8") == original
+    assert client.post("/api/video/regions/edit", json={"regions": {"1": [[5, 5], [5, 5]]}}).status_code == 400
+    # При следующем открытии берётся json рядом с видео.
+    client.post("/api/video/regions", json={"path": None})
+    assert client.post("/api/video/open", json={"path": str(video)}).json()["regions_file"] == str(sidecar)
+    # Сохранить в файл камеры (перезаписать).
+    target = client.get("/api/video/regions/save-target").json()["path"]
+    assert target == str(workspace / "jsons" / "norebo_cam25.json")
+    assert client.post("/api/video/regions/save-as", json={"path": target}).status_code == 200
+    assert json.loads(Path(target).read_text(encoding="utf-8"))["shapes"][0]["points"] == [[2.0, 2.0], [30.0, 20.0]]
+    assert client.post("/api/video/regions/save-as", json={"path": str(workspace / "x.txt")}).status_code == 400
+
+
+def test_frame_without_zones(client: TestClient, workspace: Path) -> None:
+    client.post("/api/video/open", json={"path": str(workspace / "ml_cam25_0101.avi")})
+    with_zones = client.get("/api/video/frame/2").content
+    without = client.get("/api/video/frame/2", params={"zones": False}).content
+    assert with_zones != without
+
+
+def test_playlist_and_auto_for_all_videos(client: TestClient, workspace: Path) -> None:
+    folder = workspace / "videos"
+    (folder / "day2").mkdir(parents=True)
+    _video(folder / "ml_cam25_a.avi", frames=4)
+    _video(folder / "day2" / "ml_cam25_b.avi", frames=4)
+    (folder / "ml_cam25_a_dataset").mkdir()
+    _video(folder / "ml_cam25_a_dataset" / "copy.avi", frames=2)   # папки датасетов пропускаются
+    data = client.post("/api/playlist", json={"path": str(folder)}).json()
+    assert [item["name"] for item in data["items"]] == [str(Path("day2") / "ml_cam25_b.avi"), "ml_cam25_a.avi"]
+    assert all(item["saved"] == 0 and item["regions"] == "camera" for item in data["items"])
+    assert client.post("/api/playlist", json={"path": str(folder / "nope")}).status_code == 404
+
+    client.post("/api/auto/start", json={"scope": "playlist"})
+    for _ in range(100):
+        status = client.get("/api/auto/status").json()
+        if not status["running"]:
+            break
+        time.sleep(0.05)
+    assert status["error"] == "" and status["total"] == 2
+    counts = {item["name"]: item["saved"] for item in client.get("/api/playlist").json()["items"]}
+    assert all(count and count > 0 for count in counts.values())
+    assert load_state().playlist_dir == str(folder.resolve())
+
+
+def test_position_remembered_per_video(client: TestClient, workspace: Path) -> None:
+    first, second = workspace / "ml_cam25_0101.avi", _video(workspace / "ml_cam25_0202.avi")
+    client.post("/api/video/open", json={"path": str(first)})
+    client.post("/api/video/position", json={"frame": 5})
+    client.post("/api/video/open", json={"path": str(second)})
+    assert client.post("/api/video/open", json={"path": str(first)}).json()["frame"] == 5
+
+
+def test_pick_path_reads_utf8_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    from neuro_dataset_collector.web import picker
+
+    # Окно выбора возвращает путь с русскими буквами (в Windows консоль не в UTF-8).
+    script = "import sys; sys.stdout.buffer.write('W:/Треска стейк/видео.avi'.encode('utf-8'))"
+    monkeypatch.setattr(picker, "_SCRIPT", script)
+    assert picker.pick_path("file", "video") == "W:/Треска стейк/видео.avi"

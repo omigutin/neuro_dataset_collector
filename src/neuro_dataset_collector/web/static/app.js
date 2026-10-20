@@ -1,5 +1,5 @@
 "use strict";
-// Веб-интерфейс сборщика датасета: нарезка одного видео, настройки, итог.
+// Веб-интерфейс сборщика датасета: плейлист и нарезка видео, правка зон, настройки, итог.
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -12,6 +12,8 @@ const state = {
   loading: false,
   zones: new Set(),
   positionTimer: null,
+  playlist: { dir: null, items: [] },
+  edit: null,          // правка зон: { regions: [{id, shape, points}], active, drag }
 };
 
 // ---------------------------------------------------------------- общее
@@ -63,14 +65,17 @@ function cleanKey(value) {
 
 // ---------------------------------------------------------------- выбор файлов
 
-// Системное окно выбора; если недоступно — запасной выбор в браузере.
+// Системное окно выбора; запасной выбор в браузере — только если системное окно открыть нельзя.
 async function pickPath(kind, filter, initial, title) {
+  let data;
   try {
-    const data = await api("POST", "/api/pick", { kind, filter: filter || "any", initial: initial || null, title: title || "" });
-    if (data.available) return data.path || null;
+    data = await api("POST", "/api/pick", { kind, filter: filter || "any", initial: initial || null, title: title || "" });
   } catch (error) {
     toast(error.message, "bad");
+    return null;
   }
+  if (data.available) return data.path || null;
+  if (kind === "save") { toast("Окно сохранения недоступно: укажите путь в настройках вручную", "bad"); return null; }
   return browserPick(kind === "dir" ? "dir" : (filter || "any"), initial);
 }
 
@@ -332,18 +337,85 @@ async function saveSettings(event) {
 
 async function chooseVideo() {
   const path = await pickPath("file", "video", state.info && state.info.video, "Выберите видео");
-  if (!path) return;
+  if (path) await openVideo(path);
+}
+
+async function openVideo(path) {
+  if (state.edit && !confirm("Зоны изменены, но не применены. Перейти к другому видео без сохранения?")) return;
+  stopEdit();
   try {
     pause();
     const info = await api("POST", "/api/video/open", { path });
-    if (info.suggested_regions) toast(`Разметка по номеру камеры: ${info.suggested_regions}`, "ok");
-    await applyVideo(info, 0);
+    if (info.regions_origin === "video") toast(`Разметка рядом с видео: ${info.regions_file}`, "ok");
+    else if (info.suggested_regions) toast(`Разметка по номеру камеры: ${info.suggested_regions}`, "ok");
+    await applyVideo(info, info.frame);
+    renderPlaylist();
   } catch (error) {
     toast(error.message, "bad");
   }
 }
 
+// ---------------------------------------------------------------- плейлист
+
+async function chooseFolder() {
+  const path = await pickPath("dir", null, state.playlist.dir || (state.info && state.info.video), "Папка с видео");
+  if (!path) return;
+  try {
+    state.playlist = await api("POST", "/api/playlist", { path });
+    renderPlaylist();
+    if (!state.playlist.items.length) { toast("В папке нет видео", "bad"); return; }
+    const inList = state.playlist.items.some((item) => item.path === (state.info && state.info.video));
+    if (!inList) await openVideo(state.playlist.items[0].path);
+  } catch (error) {
+    toast(error.message, "bad");
+  }
+}
+
+async function loadPlaylist() {
+  try {
+    state.playlist = await api("GET", "/api/playlist");
+    renderPlaylist();
+  } catch (error) {
+    toast(error.message, "bad");
+  }
+}
+
+const REGION_ICONS = { video: ["📌", "json рядом с видео"], camera: ["📷", "json по номеру камеры"] };
+
+function renderPlaylist() {
+  const current = state.info && state.info.video;
+  $("#playlist-dir").textContent = state.playlist.dir || "папка не выбрана";
+  $("#playlist-dir").classList.toggle("muted", !state.playlist.dir);
+  $("#playlist").innerHTML = state.playlist.items.map((item, i) => {
+    const icon = REGION_ICONS[item.regions];
+    return `<li data-index="${i}" class="${item.path === current ? "current" : ""}" title="${escapeHtml(item.path)}">
+      <span class="name">${escapeHtml(item.name)}</span>
+      ${icon ? `<span title="${icon[1]}">${icon[0]}</span>` : ""}
+      <span class="count">${item.saved ?? ""}</span></li>`;
+  }).join("") || (state.playlist.dir ? `<li class="muted">видео не найдено</li>` : "");
+  $$("#playlist li[data-index]").forEach((li) => (li.onclick = () => openVideo(state.playlist.items[Number(li.dataset.index)].path)));
+  const active = $("#playlist li.current");
+  if (active) active.scrollIntoView({ block: "nearest" });
+}
+
+function stepVideo(delta) {
+  const items = state.playlist.items;
+  if (!items.length) return;
+  const current = items.findIndex((item) => item.path === (state.info && state.info.video));
+  const next = current < 0 ? 0 : current + delta;
+  if (next < 0 || next >= items.length) { toast(delta > 0 ? "Это последнее видео" : "Это первое видео"); return; }
+  openVideo(items[next].path);
+}
+
+function countSaved(results) {
+  const item = state.playlist.items.find((it) => it.path === (state.info && state.info.video));
+  if (!item || item.saved == null) return;
+  item.saved += results.filter((r) => r.ok).length;
+  renderPlaylist();
+}
+
 async function chooseRegions() {
+  stopEdit();
   const start = (state.info && state.info.regions_file) || (state.config && state.config.regions.search_dir) || (state.info && state.info.video);
   const path = await pickPath("file", "json", start, "Выберите файл разметки (LabelMe json)");
   if (!path) return;
@@ -356,6 +428,7 @@ async function chooseRegions() {
 }
 
 async function noRegions() {
+  stopEdit();
   try {
     await applyVideo(await api("POST", "/api/video/regions", { path: null }), state.frame);
     await loadConfig();
@@ -377,8 +450,11 @@ async function applyVideo(info, frame) {
   $("#video-path").textContent = info.video || "не выбрано";
   $("#video-path").classList.toggle("muted", !info.video);
   const useRegions = info.regions_source === "file" && info.regions_file;
-  $("#regions-path").textContent = useRegions ? info.regions_file : "весь кадр";
+  const origin = { video: " (рядом с видео)", camera: " (по номеру камеры)" }[info.regions_origin] || "";
+  $("#regions-path").textContent = useRegions ? info.regions_file + origin : "весь кадр";
   $("#regions-path").classList.toggle("muted", !useRegions);
+  $("#edit-regions").disabled = !info.regions_editable;
+  $("#save-regions-as").disabled = !useRegions;
   $("#dataset-path").textContent = info.dataset_dir || "";
   $("#frame-placeholder").style.display = info.video ? "none" : "";
   $("#frame").style.display = info.video ? "" : "none";
@@ -421,7 +497,7 @@ function showFrame(index) {
   state.loading = true;
   $("#seek").value = index;
   $("#frame-number").value = index;
-  $("#frame").src = `/api/video/frame/${index}?t=${Date.now()}`;
+  $("#frame").src = `/api/video/frame/${index}?zones=${state.edit ? 0 : 1}&t=${Date.now()}`;
   rememberPosition();
 }
 
@@ -464,6 +540,7 @@ async function saveCurrent(label, force) {
   try {
     const data = await api("POST", "/api/save", { frame: state.frame, label, regions, force });
     data.results.forEach((r) => toast(r.message, r.ok ? "ok" : "bad"));
+    countSaved(data.results);
     loadHistory();
     if ($("#step-mode").checked) showFrame(state.frame + step());
   } catch (error) {
@@ -492,6 +569,9 @@ function onKey(event) {
   if ($("#picker").open) return;
   const key = event.key;
   const big = event.shiftKey ? 10 : 1;
+  if (state.edit) { editKey(event); return; }
+  if (key === "PageDown") { event.preventDefault(); stepVideo(1); return; }
+  if (key === "PageUp") { event.preventDefault(); stepVideo(-1); return; }
   if (key === " ") { event.preventDefault(); state.playing ? pause() : play(); return; }
   if (key === "ArrowRight") { event.preventDefault(); pause(); showFrame(state.frame + step() * big); return; }
   if (key === "ArrowLeft") { event.preventDefault(); pause(); showFrame(state.frame - step() * big); return; }
@@ -502,13 +582,230 @@ function onKey(event) {
   if (plain === state.config.manual.save_all_key.toLowerCase()) { event.preventDefault(); saveCurrent(null, event.shiftKey); }
 }
 
+// ---------------------------------------------------------------- правка зон
+
+const HANDLE = 7;   // половина размера маркера, пикс. экрана
+
+function startEdit() {
+  if (!state.info || !state.info.regions_editable) return;
+  pause();
+  state.edit = {
+    regions: state.info.regions.map((r) => ({ id: r.id, shape: r.shape, points: r.polygon.map(([x, y]) => [x, y]) })),
+    active: 0,
+    drag: null,
+  };
+  $("#editor").hidden = false;
+  $("#edit-bar").hidden = false;
+  $("#edit-regions").disabled = true;
+  showFrame(state.frame);
+  drawEditor();
+}
+
+function stopEdit() {
+  state.edit = null;
+  $("#editor").hidden = true;
+  $("#edit-bar").hidden = true;
+  if (state.info) $("#edit-regions").disabled = !state.info.regions_editable;
+}
+
+function cancelEdit() {
+  stopEdit();
+  showFrame(state.frame);
+}
+
+async function applyEdit() {
+  const regions = Object.fromEntries(state.edit.regions.map((r) => [r.id, r.points.map(([x, y]) => [Math.round(x * 10) / 10, Math.round(y * 10) / 10])]));
+  try {
+    const info = await api("POST", "/api/video/regions/edit", { regions });
+    stopEdit();
+    await applyVideo(info, state.frame);
+    toast(`Разметка сохранена рядом с видео: ${info.regions_file}`, "ok");
+    loadPlaylist();
+  } catch (error) {
+    toast(error.message, "bad");
+  }
+}
+
+async function saveRegionsAs() {
+  try {
+    const target = await api("GET", "/api/video/regions/save-target");
+    const path = await pickPath("save", "json", target.path, "Сохранить файл разметки");
+    if (!path) return;
+    const saved = await api("POST", "/api/video/regions/save-as", { path });
+    toast(`Разметка сохранена: ${saved.path}`, "ok");
+    loadPlaylist();
+  } catch (error) {
+    toast(error.message, "bad");
+  }
+}
+
+// Масштаб: координаты кадра → пиксели картинки на экране.
+function editScale() {
+  const img = $("#frame");
+  return img.clientWidth / (state.info.width || 1);
+}
+
+function drawEditor() {
+  if (!state.edit) return;
+  const canvas = $("#editor"), img = $("#frame");
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = Math.round(img.clientWidth * ratio);
+  canvas.height = Math.round(img.clientHeight * ratio);
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, img.clientWidth, img.clientHeight);
+  const k = editScale();
+  state.edit.regions.forEach((region, i) => {
+    const active = i === state.edit.active;
+    const color = active ? "#facc15" : "#22c55e";
+    ctx.beginPath();
+    region.points.forEach(([x, y], j) => (j ? ctx.lineTo(x * k, y * k) : ctx.moveTo(x * k, y * k)));
+    ctx.closePath();
+    ctx.lineWidth = active ? 3 : 2;
+    ctx.strokeStyle = color;
+    ctx.fillStyle = active ? "rgba(250, 204, 21, 0.12)" : "rgba(34, 197, 94, 0.08)";
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.font = "bold 15px system-ui, sans-serif";
+    const [lx, ly] = region.points[0];
+    ctx.fillText(region.id, lx * k + 5, ly * k + 18);
+    if (!active) return;
+    handles(region).forEach((h) => {
+      ctx.fillStyle = "#111";
+      ctx.fillRect(h.x * k - HANDLE, h.y * k - HANDLE, HANDLE * 2, HANDLE * 2);
+      ctx.fillStyle = color;
+      ctx.fillRect(h.x * k - HANDLE + 2, h.y * k - HANDLE + 2, HANDLE * 2 - 4, HANDLE * 2 - 4);
+    });
+  });
+}
+
+function bbox(points) {
+  const xs = points.map((p) => p[0]), ys = points.map((p) => p[1]);
+  return { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
+}
+
+// Маркеры: у прямоугольника — углы и середины сторон, у многоугольника — его точки.
+function handles(region) {
+  if (region.shape !== "rectangle") return region.points.map(([x, y], i) => ({ x, y, vertex: i }));
+  const b = bbox(region.points), mx = (b.x1 + b.x2) / 2, my = (b.y1 + b.y2) / 2;
+  return [
+    { x: b.x1, y: b.y1, sx: "x1", sy: "y1" }, { x: b.x2, y: b.y1, sx: "x2", sy: "y1" },
+    { x: b.x2, y: b.y2, sx: "x2", sy: "y2" }, { x: b.x1, y: b.y2, sx: "x1", sy: "y2" },
+    { x: mx, y: b.y1, sy: "y1" }, { x: b.x2, y: my, sx: "x2" }, { x: mx, y: b.y2, sy: "y2" }, { x: b.x1, y: my, sx: "x1" },
+  ];
+}
+
+function rectPoints(b) {
+  return [[b.x1, b.y1], [b.x2, b.y1], [b.x2, b.y2], [b.x1, b.y2]];
+}
+
+function inside(points, x, y) {
+  let hit = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const [xi, yi] = points[i], [xj, yj] = points[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
+  }
+  return hit;
+}
+
+const clampX = (x) => Math.min(Math.max(0, x), state.info.width);
+const clampY = (y) => Math.min(Math.max(0, y), state.info.height);
+
+function pointerPos(event) {
+  const rect = $("#editor").getBoundingClientRect();
+  const k = editScale();
+  return [(event.clientX - rect.left) / k, (event.clientY - rect.top) / k];
+}
+
+function bindEditor() {
+  const canvas = $("#editor");
+  canvas.addEventListener("pointerdown", (event) => {
+    if (!state.edit) return;
+    const [x, y] = pointerPos(event);
+    const tolerance = (HANDLE + 3) / editScale();
+    const order = [state.edit.active, ...state.edit.regions.keys()].filter((v, i, a) => a.indexOf(v) === i);
+    for (const i of order) {
+      const region = state.edit.regions[i];
+      const handle = i === state.edit.active
+        ? handles(region).find((h) => Math.abs(h.x - x) <= tolerance && Math.abs(h.y - y) <= tolerance) : null;
+      if (handle || inside(region.points, x, y)) {
+        state.edit.active = i;
+        state.edit.drag = { handle, start: [x, y], points: region.points.map((p) => [...p]) };
+        canvas.setPointerCapture(event.pointerId);
+        drawEditor();
+        return;
+      }
+    }
+  });
+  canvas.addEventListener("pointermove", (event) => {
+    if (!state.edit) return;
+    const [x, y] = pointerPos(event);
+    const drag = state.edit.drag;
+    const region = state.edit.regions[state.edit.active];
+    if (!drag) {
+      const tolerance = (HANDLE + 3) / editScale();
+      const over = region && handles(region).some((h) => Math.abs(h.x - x) <= tolerance && Math.abs(h.y - y) <= tolerance);
+      canvas.style.cursor = over ? "pointer" : state.edit.regions.some((r) => inside(r.points, x, y)) ? "move" : "crosshair";
+      return;
+    }
+    const h = drag.handle;
+    if (!h) {
+      // Перенос целиком: зона не выходит за край кадра.
+      const b = bbox(drag.points);
+      const dx = Math.min(Math.max(x - drag.start[0], -b.x1), state.info.width - b.x2);
+      const dy = Math.min(Math.max(y - drag.start[1], -b.y1), state.info.height - b.y2);
+      region.points = drag.points.map(([px, py]) => [px + dx, py + dy]);
+    } else if (region.shape === "rectangle") {
+      const b = bbox(drag.points);
+      if (h.sx) b[h.sx] = clampX(x);
+      if (h.sy) b[h.sy] = clampY(y);
+      const fixed = { x1: Math.min(b.x1, b.x2), x2: Math.max(b.x1, b.x2), y1: Math.min(b.y1, b.y2), y2: Math.max(b.y1, b.y2) };
+      region.points = rectPoints(fixed);
+    } else {
+      region.points = drag.points.map((p, i) => (i === h.vertex ? [clampX(x), clampY(y)] : p));
+    }
+    drawEditor();
+  });
+  const end = () => { if (state.edit && state.edit.drag) { state.edit.drag = null; drawEditor(); } };
+  canvas.addEventListener("pointerup", end);
+  canvas.addEventListener("pointercancel", end);
+  window.addEventListener("resize", drawEditor);
+  $("#frame").addEventListener("load", drawEditor);
+}
+
+function editKey(event) {
+  const moves = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+  if (event.key === "Escape") { event.preventDefault(); cancelEdit(); return; }
+  if (event.key === "Enter") { event.preventDefault(); applyEdit(); return; }
+  if (event.key === "Tab") {
+    event.preventDefault();
+    state.edit.active = (state.edit.active + 1) % state.edit.regions.length;
+    drawEditor();
+    return;
+  }
+  const move = moves[event.key];
+  if (!move) return;
+  event.preventDefault();
+  const region = state.edit.regions[state.edit.active];
+  const b = bbox(region.points);
+  const size = event.shiftKey ? 10 : 1;
+  const dx = Math.min(Math.max(move[0] * size, -b.x1), state.info.width - b.x2);
+  const dy = Math.min(Math.max(move[1] * size, -b.y1), state.info.height - b.y2);
+  region.points = region.points.map(([x, y]) => [x + dx, y + dy]);
+  drawEditor();
+}
+
 // ---------------------------------------------------------------- автонарезка
 
 let autoTimer = null;
 
-async function autoStart() {
+let autoWasRunning = false;
+
+async function autoStart(scope) {
+  if (scope === "playlist" && !confirm(`Запустить автонарезку всех видео плейлиста (${state.playlist.items.length})?`)) return;
   try {
-    await api("POST", "/api/auto/start");
+    await api("POST", "/api/auto/start", { scope });
     pollAuto();
   } catch (error) {
     toast(error.message, "bad");
@@ -518,10 +815,13 @@ async function autoStart() {
 async function pollAuto() {
   clearTimeout(autoTimer);
   const s = await api("GET", "/api/auto/status");
-  const line = s.running ? `Идёт: ${s.video}, сохранено ${s.saved}` : s.error ? `Ошибка: ${s.error}` : s.summary;
+  const where = s.total > 1 ? `видео ${s.index} из ${s.total}: ${s.video}` : s.video;
+  const line = s.running ? `Идёт: ${where}, сохранено ${s.saved}` : s.error ? `Ошибка: ${s.error}` : s.summary;
   $("#auto-status").textContent = line || "";
-  if (s.running) autoTimer = setTimeout(pollAuto, 1000);
-  else if (state.info && state.info.video) loadHistory();
+  ["#auto-start", "#auto-start-all"].forEach((id) => ($(id).disabled = s.running));
+  if (s.running) { autoWasRunning = true; autoTimer = setTimeout(pollAuto, 1000); return; }
+  if (state.info && state.info.video) loadHistory();
+  if (autoWasRunning) { autoWasRunning = false; loadPlaylist(); }
 }
 
 // ---------------------------------------------------------------- итог
@@ -616,6 +916,15 @@ function init() {
   $("#picker-choose-dir").onclick = () => finishPick(picker.path);
   $("#picker-cancel").onclick = () => finishPick(null);
   $("#pick-video").onclick = chooseVideo;
+  $("#pick-folder").onclick = chooseFolder;
+  $("#prev-video").onclick = () => stepVideo(-1);
+  $("#next-video").onclick = () => stepVideo(1);
+  $("#refresh-playlist").onclick = loadPlaylist;
+  $("#edit-regions").onclick = startEdit;
+  $("#edit-apply").onclick = applyEdit;
+  $("#edit-cancel").onclick = cancelEdit;
+  $("#save-regions-as").onclick = saveRegionsAs;
+  bindEditor();
   $("#pick-regions").onclick = chooseRegions;
   $("#no-regions").onclick = noRegions;
   $("#frame").addEventListener("load", onFrameLoaded);
@@ -625,7 +934,8 @@ function init() {
   $("#prev").onclick = () => { pause(); showFrame(state.frame - step()); };
   $("#seek").addEventListener("input", (e) => { pause(); showFrame(Number(e.target.value)); });
   $("#frame-number").addEventListener("change", (e) => { pause(); showFrame(Number(e.target.value)); });
-  $("#auto-start").onclick = autoStart;
+  $("#auto-start").onclick = () => autoStart("video");
+  $("#auto-start-all").onclick = () => autoStart("playlist");
   $("#auto-stop").onclick = async () => { await api("POST", "/api/auto/stop"); pollAuto(); };
   $("#refresh-stats").onclick = loadStats;
   $("#sync").onclick = runSync;
@@ -634,6 +944,7 @@ function init() {
   loadConfig()
     .then(() => api("GET", "/api/video"))
     .then((info) => applyVideo(info, info.frame))
+    .then(loadPlaylist)
     .then(pollAuto)
     .catch((error) => toast(error.message, "bad"));
 }

@@ -24,13 +24,20 @@
       <div class="source-row">
         <span class="source-label">Видео</span>
         <span id="video-path" class="path muted">не выбрано</span>
-        <button id="pick-video" class="primary">Выбрать видео…</button>
+        <span class="buttons">
+          <button id="pick-folder" class="primary">Папка с видео…</button>
+          <button id="pick-video">Одно видео…</button>
+        </span>
       </div>
       <div class="source-row">
         <span class="source-label">Зоны</span>
         <span id="regions-path" class="path muted">весь кадр</span>
-        <button id="pick-regions">Файл разметки…</button>
-        <button id="no-regions" title="Сохранять кадр целиком">Весь кадр</button>
+        <span class="buttons">
+          <button id="edit-regions" title="Двигать зоны и менять их размер прямо на кадре">Править зоны</button>
+          <button id="save-regions-as" title="Сохранить текущую разметку в файл (например, перезаписать файл камеры)">Сохранить разметку в…</button>
+          <button id="pick-regions">Файл разметки…</button>
+          <button id="no-regions" title="Сохранять кадр целиком">Весь кадр</button>
+        </span>
       </div>
       <div class="source-row">
         <span class="source-label">Датасет</span>
@@ -38,9 +45,29 @@
       </div>
     </div>
     <div class="slicer">
+      <div class="card playlist">
+        <h2>Плейлист</h2>
+        <div id="playlist-dir" class="path muted">папка не выбрана</div>
+        <div class="row">
+          <button id="prev-video" title="Предыдущее видео (PageUp)">◀ пред.</button>
+          <button id="next-video" title="Следующее видео (PageDown)">след. ▶</button>
+          <button id="refresh-playlist" title="Перечитать папку">↻</button>
+        </div>
+        <ul id="playlist"></ul>
+        <p class="hint">Число — сохранено кадров. Зоны: 📌 json рядом с видео, 📷 по номеру камеры.</p>
+      </div>
       <div class="viewer">
-        <img id="frame" alt="">
-        <div id="frame-placeholder" class="placeholder">Выберите видео</div>
+        <div class="frame-wrap">
+          <img id="frame" alt="">
+          <canvas id="editor" hidden></canvas>
+        </div>
+        <div id="frame-placeholder" class="placeholder">Выберите папку с видео или одно видео</div>
+        <div id="edit-bar" class="edit-bar" hidden>
+          <strong>Правка зон</strong>
+          <span class="muted">тяните за точки и стороны, внутри зоны — перенос · стрелки — сдвиг выбранной зоны (Shift — на 10) · Tab — следующая зона · Enter — применить · Esc — отменить</span>
+          <button id="edit-apply" class="primary">Применить</button>
+          <button id="edit-cancel">Отменить</button>
+        </div>
         <div class="controls">
           <button id="prev" title="← шаг назад">⏮</button>
           <button id="play" title="Пробел">▶</button>
@@ -61,7 +88,8 @@
         <div class="card">
           <h2>Автонарезка по правилам</h2>
           <div class="row">
-            <button id="auto-start" class="primary">Запустить</button>
+            <button id="auto-start" class="primary">Это видео</button>
+            <button id="auto-start-all" class="primary">Все видео плейлиста</button>
             <button id="auto-stop">Остановить</button>
           </div>
           <div id="auto-status" class="muted"></div>

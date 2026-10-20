@@ -14,7 +14,10 @@ from neuro_dataset_collector.regions import (
     FullFrameRegions,
     LabelMeRegions,
     create_region_provider,
+    find_regions_file,
+    sidecar_regions_file,
     suggest_regions_file,
+    write_labelme,
 )
 
 
@@ -143,3 +146,28 @@ def test_suggest_regions_file(tmp_path: Path) -> None:
     assert suggest_regions_file(Path("ml_cam2_x.avi"), tmp_path) == tmp_path / "norebo_cam2.json"
     assert suggest_regions_file(Path("ml_cam7_x.avi"), tmp_path) is None
     assert suggest_regions_file(Path("no_camera.avi"), tmp_path) is None
+
+
+def test_labelme_edited_keeps_other_shapes(tmp_path: Path) -> None:
+    provider = LabelMeRegions(_labelme(tmp_path), labels=["crop"], id_field="wz")
+    assert provider.shape_types() == {"1": "rectangle", "2": "polygon", "3": "rectangle"}
+    # Кадр в 2 раза больше файла: координаты записываются обратно в масштабе файла.
+    data = provider.edited({"3": [(220, 40), (320, 40), (320, 140), (220, 140)],
+                            "2": [(120, 20), (180, 20), (180, 80), (130, 90)]}, 400, 200)
+    shapes = data["shapes"]
+    assert shapes[3]["points"] == [[110.0, 20.0], [160.0, 70.0]] and shapes[3]["shape_type"] == "rectangle"
+    assert shapes[1]["points"] == [[60.0, 10.0], [90.0, 10.0], [90.0, 40.0], [65.0, 45.0]]
+    assert shapes[0]["points"] == [[10, 10], [50, 40]] and shapes[2]["label"] == "input"
+    with pytest.raises(ValueError, match="Unknown region"):
+        provider.edited({"9": [(0, 0), (1, 1), (2, 0)]}, 200, 100)
+
+
+def test_find_regions_file_prefers_json_next_to_video(tmp_path: Path) -> None:
+    marks = tmp_path / "marks"
+    marks.mkdir()
+    (marks / "norebo_cam25.json").write_text("{}", encoding="utf-8")
+    video = tmp_path / "ml_cam25_0101.avi"
+    assert find_regions_file(video, marks) == (marks / "norebo_cam25.json", "camera")
+    write_labelme({"shapes": []}, sidecar_regions_file(video))
+    assert find_regions_file(video, marks) == (tmp_path / "ml_cam25_0101.json", "video")
+    assert find_regions_file(tmp_path / "ml_cam7.avi", None) is None
