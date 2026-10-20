@@ -237,3 +237,20 @@ def test_pick_path_reads_utf8_path(monkeypatch: pytest.MonkeyPatch) -> None:
     script = "import sys; sys.stdout.buffer.write('W:/Треска стейк/видео.avi'.encode('utf-8'))"
     monkeypatch.setattr(picker, "_SCRIPT", script)
     assert picker.pick_path("file", "video") == "W:/Треска стейк/видео.avi"
+
+
+def test_single_video_fills_playlist_with_its_folder(client: TestClient, workspace: Path) -> None:
+    video = workspace / "ml_cam25_0101.avi"
+    info = client.post("/api/video/open", json={"path": str(video)}).json()
+    assert info["playlist_changed"] is True
+    data = client.get("/api/playlist").json()
+    assert data["dir"] == str(workspace) and data["current"] == str(video)
+    assert [item["name"] for item in data["items"]] == ["ml_cam25_0101.avi"]
+    assert client.post("/api/video/open", json={"path": str(video)}).json()["playlist_changed"] is False
+
+
+def test_interface_files_are_not_cached(client: TestClient) -> None:
+    page = client.get("/")
+    assert page.headers["cache-control"] == "no-cache"
+    assert "/static/app.js?v=" in page.text and "{{version}}" not in page.text
+    assert client.get("/static/app.js").headers["cache-control"] == "no-cache"

@@ -249,6 +249,7 @@ class WebSession:
             Открывает видео: своя папка датасета (при next_to_video) и файл зон —
             json рядом с видео, иначе файл с тем же номером камеры из папки разметки.
             Кадр — тот, на котором остановились в этом видео в прошлый раз.
+            Видео не из папки плейлиста — плейлистом становится папка этого видео.
         """
         path = path.resolve()
         if not path.is_file():
@@ -262,6 +263,9 @@ class WebSession:
             if self.video != path:
                 self.frame = max(0, self._positions.get(str(path), 0))
             self.video = path
+            playlist_changed = self.playlist_dir is None or self.playlist_dir not in path.parents
+            if playlist_changed:
+                self.playlist_dir = path.parent
             found = find_regions_file(path, self.config.regions.search_dir)
             if found is not None and (found[0] != self.config.regions.file
                                       or self.config.regions.source != RegionSource.FILE):
@@ -270,6 +274,7 @@ class WebSession:
             self._save_state()
         info = self.video_info()
         info["suggested_regions"] = str(found[0]) if found is not None and found[1] == "camera" else None
+        info["playlist_changed"] = playlist_changed
         return info
 
     def _use_regions_file(self, path: Path) -> None:

@@ -349,7 +349,7 @@ async function openVideo(path) {
     if (info.regions_origin === "video") toast(`Разметка рядом с видео: ${info.regions_file}`, "ok");
     else if (info.suggested_regions) toast(`Разметка по номеру камеры: ${info.suggested_regions}`, "ok");
     await applyVideo(info, info.frame);
-    renderPlaylist();
+    if (info.playlist_changed) await loadPlaylist(); else renderPlaylist();
   } catch (error) {
     toast(error.message, "bad");
   }

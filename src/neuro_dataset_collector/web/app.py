@@ -13,11 +13,12 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
+from .. import __version__
 from ..config.models import NAME_PATTERN, dataset_dir_for_video
 from .picker import pick_path
 from .session import AutoScope, WebSession
@@ -96,6 +97,12 @@ def _call(action: Callable[[], Any]) -> Any:
         raise HTTPException(400, {"errors": [str(error)]}) from error
 
 
+def _static_version() -> str:
+    """ Метка версии файлов интерфейса: меняется при обновлении программы и при правке файлов. """
+    stamp = max(int(path.stat().st_mtime) for path in _STATIC.iterdir() if path.is_file())
+    return f"{__version__}-{stamp}"
+
+
 def create_app(session: WebSession) -> FastAPI:
     """ Создаёт приложение для одной рабочей сессии. """
     @asynccontextmanager
@@ -106,9 +113,18 @@ def create_app(session: WebSession) -> FastAPI:
     app = FastAPI(title="neuro_dataset_collector", docs_url="/api/docs", lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=_STATIC), name="static")
 
+    @app.middleware("http")
+    async def no_stale_files(request: Request, call_next: Callable[[Request], Any]) -> Any:
+        # Браузер должен сверять файлы интерфейса с сервером, иначе после обновления программы
+        # остаются старые стили и скрипт.
+        response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
-        return (_STATIC / "index.html").read_text(encoding="utf-8")
+        return (_STATIC / "index.html").read_text(encoding="utf-8").replace("{{version}}", _static_version())
 
     # ---- настройки ----
 
