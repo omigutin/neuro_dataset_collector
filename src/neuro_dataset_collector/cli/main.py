@@ -18,6 +18,7 @@ from ..pipeline.offline import collect_videos
 from ..predictors.base import create_predictor
 from ..review.sync import sync_collection
 from ..sources.video import list_videos
+from ..web import DEFAULT_PORT
 
 __all__ = ["main"]
 
@@ -141,7 +142,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("web", help="запустить веб-интерфейс")
     p.add_argument("-c", "--config")
     p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--port", type=int, default=DEFAULT_PORT)
     p.add_argument("--no-browser", action="store_true")
     p.set_defaults(func=_cmd_web)
     return parser

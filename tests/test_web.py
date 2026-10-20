@@ -331,3 +331,20 @@ def test_auto_frame_shown_during_run(client: TestClient, workspace: Path) -> Non
     status = client.get("/api/auto/status").json()
     assert status["video_path"] == str(workspace / "ml_cam25_0101.avi") and status["frame"] > 0
     assert client.get("/api/auto/frame").headers["content-type"] == "image/jpeg"
+
+
+def test_find_port_skips_busy_and_detects_running_collector(client: TestClient) -> None:
+    import socket
+
+    from neuro_dataset_collector.web import app as app_module
+
+    busy = socket.socket()
+    busy.bind(("127.0.0.1", 0))
+    busy.listen()
+    port = busy.getsockname()[1]
+    try:
+        found, running = app_module.find_port("127.0.0.1", port)
+        assert found != port and running is False
+    finally:
+        busy.close()
+    assert client.get("/api/ping").json()["app"] == app_module.APP_ID

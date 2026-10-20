@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import socket
 import string
 import threading
+import urllib.request
 import webbrowser
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -21,10 +24,16 @@ from pydantic import BaseModel, ValidationError
 from .. import __version__
 from ..config.models import NAME_PATTERN, dataset_dir_for_video
 from ..regions.providers import ShapeKind
+from . import DEFAULT_PORT
 from .picker import pick_path
 from .session import AutoScope, WebSession
 
-__all__ = ["create_app", "run"]
+__all__ = ["APP_ID", "create_app", "find_port", "run"]
+
+# Сколько следующих портов пробовать, если порт занят другой программой.
+_PORT_ATTEMPTS = 20
+# Ответ /api/ping: по нему видно, что на порту уже работает этот инструмент.
+APP_ID = "neuro_dataset_collector"
 
 _STATIC = Path(__file__).parent / "static"
 _PICK_EXT = {
@@ -142,6 +151,10 @@ def create_app(session: WebSession) -> FastAPI:
         if request.url.path == "/" or request.url.path.startswith("/static/"):
             response.headers["Cache-Control"] = "no-cache"
         return response
+
+    @app.get("/api/ping")
+    def ping() -> dict[str, str]:
+        return {"app": APP_ID, "version": __version__}
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
@@ -357,10 +370,56 @@ def create_app(session: WebSession) -> FastAPI:
     return app
 
 
-def run(config_path: Path | None = None, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> None:
-    """ Запускает веб-интерфейс. Без файла настроек открывается прошлый сеанс. """
+def _port_free(host: str, port: int) -> bool:
+    """ Можно ли занять порт. """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind((host, port))
+        except OSError:
+            return False
+    return True
+
+
+def _is_collector(host: str, port: int) -> bool:
+    """ Работает ли на порту уже запущенный сборщик датасета. """
+    try:
+        with urllib.request.urlopen(f"http://{host}:{port}/api/ping", timeout=1.5) as response:
+            return bool(json.loads(response.read().decode("utf-8")).get("app") == APP_ID)
+    except (OSError, ValueError):
+        return False
+
+
+def find_port(host: str, port: int) -> tuple[int, bool]:
+    """
+        Порт для запуска: (порт, уже_запущен). Если на порту уже работает сборщик — его порт и True;
+        если порт занят другой программой — следующий свободный.
+    """
+    for candidate in range(port, port + _PORT_ATTEMPTS):
+        if _port_free(host, candidate):
+            return candidate, False
+        if _is_collector(host, candidate):
+            return candidate, True
+    raise OSError(f"No free port in range {port}-{port + _PORT_ATTEMPTS - 1}")
+
+
+def run(config_path: Path | None = None, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
+        open_browser: bool = True) -> None:
+    """
+        Запускает веб-интерфейс. Без файла настроек открывается прошлый сеанс.
+        Если сборщик уже запущен — открывает его в браузере; если порт занят другой программой — берёт следующий.
+    """
     import uvicorn
 
+    free_port, running = find_port(host, port)
+    if running:
+        url = f"http://{host}:{free_port}/"
+        print(f"Сборщик датасета уже запущен: {url} — открываю его в браузере.")
+        if open_browser:
+            webbrowser.open(url)
+        return
+    if free_port != port:
+        print(f"Порт {port} занят другой программой, использую {free_port}.")
+    port = free_port
     session = WebSession.open(config_path.resolve() if config_path else None)
     app = create_app(session)
     url = f"http://{host}:{port}/"
