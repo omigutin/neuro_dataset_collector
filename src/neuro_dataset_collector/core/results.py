@@ -47,6 +47,8 @@ class SaveResult:
     trigger: str | None = None
     similar_to: Path | None = None
     distance: int | None = None
+    source: str | None = None
+    frame_index: int | None = None
 
     @property
     def ok(self) -> bool:

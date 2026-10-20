@@ -20,6 +20,7 @@
 <main>
   <!-- ======================= Нарезка ======================= -->
   <section id="tab-slicer" class="panel active">
+    <div class="top-row">
     <div class="card sources">
       <div class="source-row">
         <span class="source-label">Видео</span>
@@ -42,6 +43,16 @@
         <span id="dataset-path" class="path muted"></span>
       </div>
     </div>
+    <div class="card auto-card">
+      <h2>Автонарезка по правилам</h2>
+      <div class="row">
+        <button id="auto-start" class="primary">Это видео</button>
+        <button id="auto-start-all" class="primary">Все видео плейлиста</button>
+        <button id="auto-stop">Остановить</button>
+      </div>
+      <div id="auto-status" class="muted"></div>
+    </div>
+    </div>
     <div class="slicer">
       <div class="card playlist">
         <h2>Плейлист</h2>
@@ -57,6 +68,8 @@
       <div class="viewer">
         <div class="frame-wrap">
           <img id="frame" alt="">
+          <img id="auto-frame" alt="" hidden>
+          <div id="auto-overlay" class="auto-overlay" hidden></div>
           <canvas id="editor" hidden></canvas>
           <div id="frame-tools" class="frame-tools" hidden>
             <button id="edit-toggle" title="Править зоны">✏️</button>
@@ -88,20 +101,11 @@
         <div id="zones" class="row"></div>
         <div id="legend" class="legend"></div>
       </div>
-      <aside>
-        <div class="card">
-          <h2>Автонарезка по правилам</h2>
-          <div class="row">
-            <button id="auto-start" class="primary">Это видео</button>
-            <button id="auto-start-all" class="primary">Все видео плейлиста</button>
-            <button id="auto-stop">Остановить</button>
-          </div>
-          <div id="auto-status" class="muted"></div>
-        </div>
-        <div class="card">
-          <h2>Последние действия</h2>
-          <ul id="history"></ul>
-        </div>
+      <aside class="card history-panel">
+        <h2>История</h2>
+        <p class="hint">Щелчок — перейти к кадру. «→ КЛАСС» — перенести кадр в другой класс, 🗑 — в корзину.
+          Отказы — только за этот запуск программы.</p>
+        <div id="history"></div>
       </aside>
     </div>
   </section>

@@ -10,6 +10,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+import numpy as np
+
 from ..catalog.catalog import Catalog, SampleRecord
 from ..config.loader import dump_config
 from ..config.models import (
@@ -104,6 +106,7 @@ class Collector:
         self._session_counts: Counter[str] = Counter()
         self._rejections: Counter[str] = Counter()
         self._listeners: list[Callable[[SaveResult], None]] = []
+        self._rejection_listeners: list[Callable[[SaveResult, np.ndarray], None]] = []
 
     # ---- свойства -------------------------------------------------------------------------------
 
@@ -130,6 +133,10 @@ class Collector:
     def add_listener(self, listener: Callable[[SaveResult], None]) -> None:
         """ Подписка на каждый результат сохранения (для интерфейсов и логов). """
         self._listeners.append(listener)
+
+    def add_rejection_listener(self, listener: Callable[[SaveResult, np.ndarray], None]) -> None:
+        """ Подписка на отказы вместе с картинкой выреза, который не сохранён (чтобы показать его человеку). """
+        self._rejection_listeners.append(listener)
 
     def regions_for(self, width: int, height: int) -> list[Region]:
         """ Зоны для кадра заданного размера (пусто — весь кадр). """
@@ -380,8 +387,12 @@ class Collector:
             trigger=trigger,
             similar_to=rejection.similar_to,
             distance=rejection.distance,
+            source=candidate.source,
+            frame_index=candidate.frame_index,
         )
         self._notify(result)
+        for listener in self._rejection_listeners:
+            listener(result, candidate.image)
         return result
 
     def _store(
@@ -456,7 +467,8 @@ class Collector:
         if note:
             message += f" ({note})"
         result = SaveResult(SaveStatus.SAVED, message, region_id=candidate.region_id, label=label,
-                            sample_id=sample_id, path=path, sample_status=status, trigger=trigger)
+                            sample_id=sample_id, path=path, sample_status=status, trigger=trigger,
+                            source=frame.source, frame_index=frame.index)
         self._notify(result)
         return result
 

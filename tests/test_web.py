@@ -269,3 +269,65 @@ def test_rectangle_becomes_polygon_and_points_change(client: TestClient, workspa
     assert len(client.post("/api/video/regions/edit", json={"regions": four}).json()["regions"][0]["polygon"]) == 4
     two = {"1": {"points": five[:2], "shape": "polygon"}}
     assert client.post("/api/video/regions/edit", json={"regions": two}).status_code == 400
+
+
+def test_history_relabel_delete_and_rejections(client: TestClient, workspace: Path,
+                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    video = workspace / "ml_cam25_0101.avi"
+    client.post("/api/video/open", json={"path": str(video)})
+    saved = client.post("/api/save", json={"frame": 3, "label": "EMPTY"}).json()["results"]
+    client.post("/api/save", json={"frame": 3, "label": "EMPTY", "regions": ["1"]})   # отказ: дубль
+    data = client.get("/api/history", params={"video": str(video)}).json()
+    kinds = [item["kind"] for item in data["items"]]
+    assert data["total"] == 2 and data["rejected"] == 1 and kinds.count("saved") == 2 and kinds[0] == "rejected"
+    rejected = data["items"][0]
+    assert rejected["frame"] == 3 and rejected["similar_to"] == saved[0]["path"]
+    assert client.get(rejected["image"]).headers["content-type"] == "image/jpeg"
+    sample = next(item for item in data["items"] if item["kind"] == "saved" and item["region"] == "1")
+
+    moved = client.post(f"/api/sample/{sample['id']}/relabel", json={"video": str(video), "label": "FULL"}).json()
+    assert Path(moved["path"]).parent.name == "FULL" and Path(moved["path"]).exists()
+    after = client.get("/api/history", params={"video": str(video)}).json()
+    item = next(i for i in after["items"] if i["kind"] == "saved" and i["id"] == sample["id"])
+    assert item["label"] == "FULL" and item["status"] == "verified"
+    bad = client.post(f"/api/sample/{sample['id']}/relabel", json={"video": str(video), "label": "X"})
+    assert bad.status_code == 400
+
+    trashed: list[str] = []
+    monkeypatch.setattr("send2trash.send2trash", lambda path: trashed.append(path))
+    assert client.post(f"/api/sample/{sample['id']}/delete", json={"video": str(video)}).status_code == 200
+    assert trashed == [moved["path"]]
+    assert client.get("/api/history", params={"video": str(video)}).json()["total"] == 1
+    assert client.post(f"/api/sample/{sample['id']}/delete", json={"video": str(video)}).status_code == 400
+
+    playlist = client.get("/api/playlist").json()["items"][0]
+    assert playlist["labels"] == {"EMPTY": 1, "FULL": 1} and playlist["rejected"] == 1
+    # Картинку из папки другого видео отдаём только с указанием видео.
+    assert client.get("/api/file", params={"path": saved[1]["path"], "video": str(video)}).status_code == 200
+
+
+def test_open_dataset_folder(client: TestClient, workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from neuro_dataset_collector.web import session as session_module
+
+    opened: list[Path] = []
+    monkeypatch.setattr(session_module, "_open_in_explorer", opened.append)
+    video = workspace / "ml_cam25_0101.avi"
+    assert client.post("/api/open-folder", json={"video": str(video)}).status_code == 404
+    client.post("/api/video/open", json={"path": str(video)})
+    client.post("/api/save", json={"frame": 1, "label": "FULL"})
+    folder = client.post("/api/open-folder", json={"video": str(video)}).json()["path"]
+    assert folder == str(workspace / "ml_cam25_0101_dataset")
+    assert opened == [workspace / "ml_cam25_0101_dataset"]
+
+
+def test_auto_frame_shown_during_run(client: TestClient, workspace: Path) -> None:
+    assert client.get("/api/auto/frame").status_code == 404
+    client.post("/api/video/open", json={"path": str(workspace / "ml_cam25_0101.avi")})
+    client.post("/api/auto/start", json={"scope": "video"})
+    for _ in range(100):
+        if not client.get("/api/auto/status").json()["running"]:
+            break
+        time.sleep(0.05)
+    status = client.get("/api/auto/status").json()
+    assert status["video_path"] == str(workspace / "ml_cam25_0101.avi") and status["frame"] > 0
+    assert client.get("/api/auto/frame").headers["content-type"] == "image/jpeg"

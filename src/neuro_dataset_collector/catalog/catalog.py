@@ -275,6 +275,30 @@ class Catalog:
             rows = self._conn.execute(query + " ORDER BY id", params).fetchall()
         return [self._record(row) for row in rows]
 
+    def page(
+        self,
+        collection: str,
+        source: str | None = None,
+        statuses: Iterable[SampleStatus] | None = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> tuple[list[SampleRecord], int]:
+        """ Страница записей коллекции (новые первыми) и общее число; source — только одно видео. """
+        where = "collection = ?"
+        params: list[object] = [collection]
+        if source is not None:
+            where += " AND source = ?"
+            params.append(source)
+        if statuses is not None:
+            values = [status.value for status in statuses]
+            where += f" AND status IN ({','.join('?' for _ in values)})"
+            params.extend(values)
+        with self._lock:
+            total = int(self._conn.execute(f"SELECT COUNT(*) FROM samples WHERE {where}", params).fetchone()[0])
+            rows = self._conn.execute(f"SELECT {_COLUMNS} FROM samples WHERE {where} ORDER BY id DESC LIMIT ? OFFSET ?",
+                                      [*params, int(limit), int(offset)]).fetchall()
+        return [self._record(row) for row in rows], total
+
     def collections(self) -> list[str]:
         """ Все коллекции каталога. """
         with self._lock:

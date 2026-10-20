@@ -13,6 +13,7 @@ const state = {
   zones: new Set(),
   positionTimer: null,
   playlist: { dir: null, items: [] },
+  auto: null,          // ход автонарезки (ответ /api/auto/status)
   edit: null,          // правка зон: { regions: [{id, shape, points}], active, vertex, drag, history }
 };
 
@@ -384,18 +385,36 @@ const REGION_ICONS = { video: ["📌", "json рядом с видео"], camera:
 
 function renderPlaylist() {
   const current = state.info && state.info.video;
+  const autoVideo = state.auto && state.auto.running ? state.auto.video_path : null;
   $("#playlist-dir").textContent = state.playlist.dir || "папка не выбрана";
   $("#playlist-dir").classList.toggle("muted", !state.playlist.dir);
   $("#playlist").innerHTML = state.playlist.items.map((item, i) => {
     const icon = REGION_ICONS[item.regions];
-    return `<li data-index="${i}" class="${item.path === current ? "current" : ""}" title="${escapeHtml(item.path)}">
+    const labels = Object.entries(item.labels || {}).map(([name, n]) => `${escapeHtml(name)} ${n}`).join(" · ");
+    const classes = [item.path === current ? "current" : "", item.path === autoVideo ? "auto" : ""].join(" ");
+    return `<li data-index="${i}" class="${classes}" title="${escapeHtml(item.path)}">
       <span class="name">${escapeHtml(item.name)}</span>
       ${icon ? `<span title="${icon[1]}">${icon[0]}</span>` : ""}
-      <span class="count">${item.saved ?? ""}</span></li>`;
+      <span class="count">${item.saved ?? ""}</span>
+      ${item.saved ? `<button class="folder" data-folder="${i}" title="Открыть папку с кадрами этого видео">📂</button>` : ""}
+      ${labels ? `<span class="labels">${labels}</span>` : ""}</li>`;
   }).join("") || (state.playlist.dir ? `<li class="muted">видео не найдено</li>` : "");
   $$("#playlist li[data-index]").forEach((li) => (li.onclick = () => openVideo(state.playlist.items[Number(li.dataset.index)].path)));
+  $$("#playlist button[data-folder]").forEach((button) => (button.onclick = (event) => {
+    event.stopPropagation();
+    openFolder(state.playlist.items[Number(button.dataset.folder)].path);
+  }));
   const active = $("#playlist li.current");
   if (active) active.scrollIntoView({ block: "nearest" });
+  renderHistory();
+}
+
+async function openFolder(video) {
+  try {
+    await api("POST", "/api/open-folder", { video });
+  } catch (error) {
+    toast(error.message, "bad");
+  }
 }
 
 function stepVideo(delta) {
@@ -456,14 +475,14 @@ async function applyVideo(info, frame) {
   updateFrameTools();
   $("#dataset-path").textContent = info.dataset_dir || "";
   $("#frame-placeholder").style.display = info.video ? "none" : "";
-  $("#frame").style.display = info.video ? "" : "none";
+  $("#frame").style.display = info.video && !autoRunning() ? "" : "none";
   if (!info.video) { $("#video-info").textContent = ""; $("#zones").innerHTML = ""; return; }
   state.zones = new Set((info.regions || []).map((r) => r.id));
   $("#video-info").textContent = `${info.name}: ${info.width}×${info.height}, ${Number(info.fps).toFixed(1)} к/с, кадров: ${info.frames}`;
   $("#seek").max = Math.max(0, info.frames - 1);
   renderZones();
   showFrame(frame ?? info.frame ?? 0);
-  loadHistory();
+  renderHistory();
 }
 
 function renderZones() {
@@ -532,34 +551,159 @@ function pause() {
   $("#play").textContent = "▶";
 }
 
-async function saveCurrent(label, force) {
+async function saveCurrent(label, force, onlyRegions) {
   if (!state.info || !state.info.video) { toast("Сначала выберите видео", "bad"); return; }
-  const regions = state.info.regions.length ? Array.from(state.zones) : null;
+  if (autoRunning()) { toast("Идёт автонарезка — дождитесь окончания или остановите её", "bad"); return; }
+  const regions = onlyRegions || (state.info.regions.length ? Array.from(state.zones) : null);
   if (regions && !regions.length) { toast("Не выбрано ни одной зоны", "bad"); return; }
   try {
     const data = await api("POST", "/api/save", { frame: state.frame, label, regions, force });
     data.results.forEach((r) => toast(r.message, r.ok ? "ok" : "bad"));
     countSaved(data.results);
-    loadHistory();
+    loadGroup(state.info.video);
     if ($("#step-mode").checked) showFrame(state.frame + step());
   } catch (error) {
     toast(error.message, "bad");
   }
 }
 
-function fileLink(path, text) {
-  const url = `/api/file?path=${encodeURIComponent(path)}`;
-  return `<a href="${url}" target="_blank">${escapeHtml(text)}</a><img src="${url}" loading="lazy" alt="">`;
+// ---------------------------------------------------------------- история
+
+// Группы истории по видео: загруженные записи, сколько всего, тип задачи и классы.
+const history = { groups: new Map() };
+
+const fileUrl = (path, video) => `/api/file?path=${encodeURIComponent(path)}&video=${encodeURIComponent(video)}`;
+const REJECT_NAMES = { duplicate: "похож на сохранённый", disk_full: "мало места на диске", empty_region: "зона вне кадра" };
+const MODE_NAMES = { manual: "вручную", auto: "авто" };
+const autoRunning = () => !!(state.auto && state.auto.running);
+
+// Видео, у которых есть что показать: сохранённые кадры, отказы, открытое и нарезаемое сейчас.
+function historyVideos() {
+  const current = state.info && state.info.video;
+  const autoVideo = autoRunning() ? state.auto.video_path : null;
+  const list = state.playlist.items
+    .filter((item) => item.saved || item.rejected || item.path === current || item.path === autoVideo)
+    .map((item) => ({ path: item.path, name: item.name, saved: item.saved, rejected: item.rejected }));
+  if (current && !list.some((item) => item.path === current)) list.unshift({ path: current, name: current.split(/[\\/]/).pop() });
+  // Сверху — видео, которое режется сейчас, затем открытое.
+  const rank = (item) => (item.path === autoVideo ? 0 : item.path === current ? 1 : 2);
+  return list.map((item, i) => [rank(item), i, item]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map((x) => x[2]);
 }
 
-async function loadHistory() {
-  const data = await api("GET", "/api/history");
-  $("#history").innerHTML = data.items.map((item) => {
-    let extra = "";
-    if (item.ok && item.path) extra = fileLink(item.path, "открыть");
-    else if (item.similar_to) extra = `похож на: ${fileLink(item.similar_to, item.similar_to.split(/[\\/]/).pop())}`;
-    return `<li class="${item.ok ? "ok" : "bad"}">[${escapeHtml(item.region)}] ${escapeHtml(item.message)}${extra ? "<br>" + extra : ""}</li>`;
-  }).join("");
+function renderHistory() {
+  const box = $("#history");
+  const videos = historyVideos();
+  const keep = new Set(videos.map((v) => v.path));
+  $$("#history details").forEach((el) => { if (!keep.has(el.dataset.video)) el.remove(); });
+  videos.forEach((video, index) => {
+    let el = $$("#history details").find((d) => d.dataset.video === video.path);
+    if (!el) {
+      el = document.createElement("details");
+      el.dataset.video = video.path;
+      el.innerHTML = `<summary></summary><div class="h-list"></div><button class="h-more" hidden>Показать ещё</button>`;
+      el.addEventListener("toggle", () => { if (el.open && !history.groups.has(video.path)) loadGroup(video.path); });
+      el.querySelector(".h-more").onclick = () => loadGroup(video.path, true);
+      if (video.path === (state.info && state.info.video) || video.path === (autoRunning() && state.auto.video_path)) el.open = true;
+    }
+    if (autoRunning() && video.path === state.auto.video_path && !el.dataset.autoOpened) {
+      el.dataset.autoOpened = "1";
+      el.open = true;
+    }
+    if (box.children[index] !== el) box.insertBefore(el, box.children[index] || null);
+    const group = history.groups.get(video.path);
+    const saved = group ? group.total : video.saved || 0;
+    const rejected = group ? group.rejected : video.rejected || 0;
+    el.querySelector("summary").innerHTML = `${escapeHtml(video.name)} <span class="muted">— ${saved} сохр.${rejected ? `, ${rejected} отказ.` : ""}</span>`;
+    if (el.open && !group) loadGroup(video.path);
+  });
+  if (!videos.length) box.innerHTML = `<p class="muted">Пока ничего не сохранено</p>`;
+  else $$("#history > p").forEach((el) => el.remove());
+}
+
+async function loadGroup(video, more) {
+  if (!video) return;
+  const old = history.groups.get(video);
+  const offset = more && old ? old.items.filter((i) => i.kind === "saved").length : 0;
+  try {
+    const data = await api("GET", `/api/history?${new URLSearchParams({ video, offset, limit: 100 })}`);
+    if (more && old) data.items = old.items.concat(data.items.filter((i) => i.kind === "saved"));
+    if (more && old) data.rejected = old.rejected;
+    history.groups.set(video, data);
+    renderGroup(video);
+  } catch (error) {
+    toast(error.message, "bad");
+  }
+}
+
+function renderGroup(video) {
+  const el = $$("#history details").find((d) => d.dataset.video === video);
+  const group = history.groups.get(video);
+  if (!el || !group) { renderHistory(); return; }
+  const current = state.info && state.info.video === video ? state.frame : null;
+  el.querySelector(".h-list").innerHTML = group.items.map((item, i) => historyItem(group, item, i, current)).join("")
+    || `<p class="muted">нет записей</p>`;
+  const loaded = group.items.filter((i) => i.kind === "saved").length;
+  el.querySelector(".h-more").hidden = loaded >= group.total;
+  renderHistory();
+}
+
+function historyItem(group, item, index, currentFrame) {
+  const time = item.time ? new Date(item.time * 1000).toLocaleTimeString() : "";
+  const where = [`кадр ${item.frame}`, item.region ? `зона ${escapeHtml(item.region)}` : "", MODE_NAMES[item.mode] || "", time]
+    .filter(Boolean).join(" · ");
+  const here = currentFrame === item.frame ? " current" : "";
+  if (item.kind === "rejected") {
+    const similar = item.similar_to
+      ? `<figure><a href="${fileUrl(item.similar_to, group.video)}" target="_blank"><img src="${fileUrl(item.similar_to, group.video)}" loading="lazy" alt=""></a>похож</figure>` : "";
+    return `<div class="h-item rejected${here}" data-index="${index}">
+      <div class="h-thumbs"><figure><a href="${item.image}" target="_blank"><img src="${item.image}" alt=""></a>не сохранён</figure>${similar}</div>
+      <div><div class="h-title">Не сохранён${item.label ? ` (${escapeHtml(item.label)})` : ""}: ${escapeHtml(REJECT_NAMES[item.reason] || item.reason || "")}</div>
+        <div class="muted">${where}</div>
+        <div class="h-actions"><button data-act="force">Сохранить всё равно</button></div></div></div>`;
+  }
+  const url = fileUrl(item.path, group.video);
+  const moves = group.task === "classify"
+    ? group.classes.filter((c) => c !== item.label).map((c) => `<button data-act="relabel" data-label="${escapeHtml(c)}">→ ${escapeHtml(c)}</button>`).join("") : "";
+  const status = item.status === "verified" ? " ✓" : item.status === "suspect" ? " ⚠" : "";
+  return `<div class="h-item${here}" data-index="${index}">
+    <div class="h-thumbs"><a href="${url}" target="_blank"><img src="${url}" loading="lazy" alt=""></a></div>
+    <div><div class="h-title">${escapeHtml(item.label || (group.task === "classify" ? "без класса" : "кадр"))}${status}</div>
+      <div class="muted">${where}</div>
+      <div class="h-actions">${moves}<button data-act="delete" class="del" title="В корзину">🗑</button></div></div></div>`;
+}
+
+async function goToFrame(video, frame) {
+  if (!state.info || state.info.video !== video) await openVideo(video);
+  if (!state.info || state.info.video !== video) return;
+  pause();
+  showFrame(frame);
+  renderGroup(video);
+}
+
+async function onHistoryClick(event) {
+  const itemEl = event.target.closest(".h-item");
+  if (!itemEl || event.target.closest("a")) return;
+  const video = itemEl.closest("details").dataset.video;
+  const item = history.groups.get(video).items[Number(itemEl.dataset.index)];
+  const button = event.target.closest("button[data-act]");
+  if (!button) { goToFrame(video, item.frame); return; }
+  try {
+    if (button.dataset.act === "relabel") {
+      await api("POST", `/api/sample/${item.id}/relabel`, { video, label: button.dataset.label });
+      toast(`Кадр перенесён в «${button.dataset.label}»`, "ok");
+    } else if (button.dataset.act === "delete") {
+      if (!confirm("Удалить этот кадр в корзину?")) return;
+      await api("POST", `/api/sample/${item.id}/delete`, { video });
+      toast("Кадр удалён в корзину", "ok");
+    } else if (button.dataset.act === "force") {
+      await goToFrame(video, item.frame);
+      await saveCurrent(item.label, true, item.region ? [item.region] : null);
+    }
+    await loadGroup(video);
+    loadPlaylist();
+  } catch (error) {
+    toast(error.message, "bad");
+  }
 }
 
 function onKey(event) {
@@ -569,6 +713,7 @@ function onKey(event) {
   const key = event.key;
   const big = event.shiftKey ? 10 : 1;
   if (state.edit) { editKey(event); return; }
+  if (autoRunning()) return;
   if (key === "PageDown") { event.preventDefault(); stepVideo(1); return; }
   if (key === "PageUp") { event.preventDefault(); stepVideo(-1); return; }
   if (key === " ") { event.preventDefault(); state.playing ? pause() : play(); return; }
@@ -620,7 +765,7 @@ function cancelEdit() {
 // Кнопки поверх кадра: ✏️ — правка, в правке 💾 — сохранить, ✖ — выйти без сохранения, ↶ — отменить.
 function updateFrameTools() {
   const info = state.info, editing = !!state.edit;
-  $("#frame-tools").hidden = !(info && info.video);
+  $("#frame-tools").hidden = !(info && info.video) || autoRunning();
   if (!info) return;
   const toggle = $("#edit-toggle");
   toggle.textContent = editing ? "💾" : "✏️";
@@ -939,11 +1084,13 @@ function editKey(event) {
 
 let autoTimer = null;
 
-let autoWasRunning = false;
+let autoTicks = 0;
 
 async function autoStart(scope) {
   if (scope === "playlist" && !confirm(`Запустить автонарезку всех видео плейлиста (${state.playlist.items.length})?`)) return;
+  if (state.edit) { toast("Сначала сохраните или отмените правку зон", "bad"); return; }
   try {
+    pause();
     await api("POST", "/api/auto/start", { scope });
     pollAuto();
   } catch (error) {
@@ -953,14 +1100,44 @@ async function autoStart(scope) {
 
 async function pollAuto() {
   clearTimeout(autoTimer);
-  const s = await api("GET", "/api/auto/status");
+  let s;
+  try { s = await api("GET", "/api/auto/status"); } catch (error) { autoTimer = setTimeout(pollAuto, 2000); return; }
+  const wasRunning = autoRunning();
+  state.auto = s;
   const where = s.total > 1 ? `видео ${s.index} из ${s.total}: ${s.video}` : s.video;
-  const line = s.running ? `Идёт: ${where}, сохранено ${s.saved}` : s.error ? `Ошибка: ${s.error}` : s.summary;
+  const line = s.running ? `Идёт: ${where}, кадр ${s.frame}, сохранено ${s.saved}` : s.error ? `Ошибка: ${s.error}` : s.summary;
   $("#auto-status").textContent = line || "";
+  $("#auto-overlay").textContent = s.running ? `Автонарезка · ${where} · кадр ${s.frame} · сохранено ${s.saved}` : "";
   ["#auto-start", "#auto-start-all"].forEach((id) => ($(id).disabled = s.running));
-  if (s.running) { autoWasRunning = true; autoTimer = setTimeout(pollAuto, 1000); return; }
-  if (state.info && state.info.video) loadHistory();
-  if (autoWasRunning) { autoWasRunning = false; loadPlaylist(); }
+  showAutoView(s.running);
+  if (s.running) {
+    autoTicks += 1;
+    if (!wasRunning || autoTicks % 2 === 0) loadGroup(s.video_path);
+    if (!wasRunning || autoTicks % 4 === 0) loadPlaylist();
+    autoTimer = setTimeout(pollAuto, 700);
+    return;
+  }
+  if (wasRunning) {
+    await refreshVideo();
+    await loadPlaylist();
+    history.groups.forEach((_, video) => loadGroup(video));
+  }
+}
+
+// Пока идёт автонарезка, вместо обычного кадра показывается обрабатываемый.
+function showAutoView(on) {
+  const img = $("#auto-frame");
+  const wasOn = !img.hidden;
+  img.hidden = !on;
+  $("#auto-overlay").hidden = !on;
+  $("#frame").style.display = on || !(state.info && state.info.video) ? "none" : "";
+  $("#frame-tools").hidden = on || !(state.info && state.info.video);
+  if (on && !wasOn) nextAutoFrame();
+}
+
+function nextAutoFrame() {
+  if (!autoRunning()) return;
+  $("#auto-frame").src = `/api/auto/frame?t=${Date.now()}`;
 }
 
 // ---------------------------------------------------------------- итог
@@ -1067,6 +1244,9 @@ function init() {
   $("#pick-regions").onclick = chooseRegions;
   $("#no-regions").onclick = noRegions;
   $("#frame").addEventListener("load", onFrameLoaded);
+  $("#auto-frame").addEventListener("load", () => setTimeout(nextAutoFrame, 250));
+  $("#auto-frame").addEventListener("error", () => setTimeout(nextAutoFrame, 500));
+  $("#history").addEventListener("click", onHistoryClick);
   $("#frame").addEventListener("error", onFrameError);
   $("#play").onclick = () => (state.playing ? pause() : play());
   $("#next").onclick = () => { pause(); showFrame(state.frame + step()); };

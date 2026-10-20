@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import threading
-from collections import deque
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -13,11 +16,11 @@ import numpy as np
 import yaml
 
 from .._cv import get_cv2
-from ..catalog.catalog import Catalog
+from ..catalog.catalog import CATALOG_FILENAME, Catalog
 from ..config.loader import dump_config, load_config, resolve_paths, save_config
-from ..config.models import DATASET_DIR_SUFFIX, CollectorConfig, RegionSource, dataset_dir_for_video
+from ..config.models import DATASET_DIR_SUFFIX, CollectorConfig, RegionSource, TaskType
 from ..core.results import ExportReport, SaveResult, SyncReport
-from ..core.types import Frame, Point, Region
+from ..core.types import Frame, Point, Region, SampleStatus
 from ..export.roboflow import export_dataset
 from ..pipeline.collector import FULL_FRAME_ID, Collector
 from ..pipeline.offline import OfflineReport, collect_videos
@@ -31,19 +34,25 @@ from ..regions.providers import (
     suggest_regions_file,
     write_labelme,
 )
+from ..review.manual import reject_sample, relabel_sample, sample_files
 from ..review.sync import sync_collection
 from ..sources.video import VideoReader, list_videos
+from ..storage.layout import IMAGES_DIR, SUSPECT_DIR
+from .history import RejectionLog, sample_item
 from .state import SessionState, default_config_path, load_state, save_state
 
 __all__ = ["AutoRunState", "AutoScope", "WebSession"]
 
-_HISTORY = 50
 # Сколько последних позиций в видео помнить между запусками.
 _MAX_POSITIONS = 500
 _IMAGE_EXT = frozenset({".jpg", ".jpeg", ".png", ".bmp", ".webp"})
 
 # Автонарезка: только открытое видео или все видео плейлиста.
 AutoScope = Literal["video", "playlist"]
+# Кадры, которые показываются в истории (удалённые и сбойные не показываются).
+_HISTORY_STATUSES = (SampleStatus.PENDING, SampleStatus.SUSPECT, SampleStatus.VERIFIED)
+# Сколько секунд зона подсвечивается после сохранения или отказа при показе автонарезки.
+_MARK_SECONDS = 0.6
 
 
 @dataclass
@@ -53,6 +62,8 @@ class AutoRunState:
     running: bool = False
     scope: str = "video"
     video: str = ""
+    video_path: str = ""
+    frame: int = 0
     index: int = 0
     total: int = 0
     saved: int = 0
@@ -80,11 +91,15 @@ class WebSession:
     # и видят дубли друг друга.
     _catalogs: dict[Path, Catalog] = field(default_factory=dict)
     _catalog_users: dict[Path, int] = field(default_factory=dict)
-    _history: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=_HISTORY))
+    _rejections: RejectionLog = field(default_factory=RejectionLog)
     _lock: threading.RLock = field(default_factory=threading.RLock)
     _auto: AutoRunState = field(default_factory=AutoRunState)
     _auto_stop: threading.Event = field(default_factory=threading.Event)
     _auto_thread: threading.Thread | None = None
+    # Показ автонарезки: последний обработанный кадр, его зоны и итог по зонам.
+    _auto_frame: Frame | None = None
+    _auto_regions: list[Region] = field(default_factory=list)
+    _auto_marks: dict[str, tuple[bool, float]] = field(default_factory=dict)
 
     # ---- запуск и сеанс -----------------------------------------------------------------------------
 
@@ -188,7 +203,8 @@ class WebSession:
                 except Exception:
                     self._release_catalog(config.catalog.root)
                     raise
-                self._collector.add_listener(self._remember)
+                video = str(self.video) if self.video else ""
+                self._collector.add_rejection_listener(lambda result, image: self._rejections.add(video, result, image))
             return self._collector
 
     def _close_collector(self, check_auto: bool = False) -> None:
@@ -223,9 +239,6 @@ class WebSession:
             if catalog is not None:
                 catalog.close()
 
-    def _remember(self, result: SaveResult) -> None:
-        self._history.appendleft(self.result_to_dict(result))
-
     def result_to_dict(self, result: SaveResult) -> dict[str, Any]:
         """ Результат для передачи в браузер. """
         return {
@@ -239,9 +252,73 @@ class WebSession:
             "distance": result.distance,
         }
 
-    def history(self) -> list[dict[str, Any]]:
-        """ Последние результаты сохранения. """
-        return list(self._history)
+    # ---- история -------------------------------------------------------------------------------------
+
+    def history(self, video: Path, offset: int = 0, limit: int = 100) -> dict[str, Any]:
+        """
+            История видео: сохранённые кадры из каталога (постранично, новые первыми)
+            и, на первой странице, отказы текущего запуска.
+        """
+        config = self.config_for_video(video)
+        records, total = [], 0
+        if (config.catalog.root / CATALOG_FILENAME).exists():
+            catalog = self._acquire_catalog(config.catalog.root)
+            try:
+                found, total = catalog.page(config.catalog.collection, video.stem,
+                                            _HISTORY_STATUSES, offset, limit)
+                records = [sample_item(record, str(catalog.absolute(record))) for record in found]
+            finally:
+                self._release_catalog(config.catalog.root)
+        rejected = self._rejections.items(str(video)) if offset == 0 else []
+        items = sorted(records + rejected, key=lambda item: item["time"], reverse=True)
+        return {"video": str(video), "total": total, "rejected": len(rejected), "offset": offset,
+                "items": items, "classes": config.classes, "task": config.task.value}
+
+    def rejected_image(self, rejection_id: int) -> bytes:
+        """ Картинка выреза, который не сохранён. """
+        return self._rejections.image(rejection_id)
+
+    def _with_catalog(self, video: Path) -> tuple[CollectorConfig, Catalog]:
+        """ Настройки и каталог видео; файлы открытого видео перед этим дописываются. """
+        config = self.config_for_video(video)
+        if not (config.catalog.root / CATALOG_FILENAME).exists():
+            raise FileNotFoundError(f"No saved frames for {video.name}")
+        if self._collector is not None:
+            self._collector.flush()
+        return config, self._acquire_catalog(config.catalog.root)
+
+    def relabel(self, video: Path, sample_id: int, label: str) -> dict[str, Any]:
+        """ Переносит сохранённый кадр видео в другой класс. """
+        with self._lock:
+            config, catalog = self._with_catalog(video)
+            try:
+                target = relabel_sample(config, catalog, sample_id, label)
+            finally:
+                self._release_catalog(config.catalog.root)
+        return {"path": str(target), "label": label}
+
+    def delete_sample(self, video: Path, sample_id: int) -> dict[str, Any]:
+        """ Удаляет сохранённый кадр видео в корзину и отмечает его отклонённым. """
+        from send2trash import send2trash
+
+        with self._lock:
+            config, catalog = self._with_catalog(video)
+            try:
+                files = sample_files(config, catalog, sample_id)
+                for file in files:
+                    send2trash(str(file))
+                reject_sample(catalog, sample_id)
+            finally:
+                self._release_catalog(config.catalog.root)
+        return {"deleted": [str(file) for file in files]}
+
+    def open_dataset_folder(self, video: Path) -> Path:
+        """ Открывает папку датасета видео в проводнике (на компьютере, где запущена программа). """
+        folder = self.config_for_video(video).collection_dir
+        if not folder.is_dir():
+            raise FileNotFoundError(f"No dataset folder yet: {folder}")
+        _open_in_explorer(folder)
+        return folder
 
     # ---- видео и зоны --------------------------------------------------------------------------------
 
@@ -271,7 +348,6 @@ class WebSession:
             if found is not None and (found[0] != self.config.regions.file
                                       or self.config.regions.source != RegionSource.FILE):
                 self._use_regions_file(found[0])
-            self._history.clear()
             self._save_state()
         info = self.video_info()
         info["suggested_regions"] = str(found[0]) if found is not None and found[1] == "camera" else None
@@ -417,11 +493,16 @@ class WebSession:
 
     def render(self, frame: Frame, max_width: int = 1280, zones: bool = True) -> bytes:
         """ JPEG кадра для показа в браузере; zones — нарисовать зоны (без них — для правки зон). """
-        cv2 = get_cv2()
         image = frame.image.copy()
         if zones:
             for region in self.collector().regions_for(frame.width, frame.height):
                 self._draw_region(image, region)
+        return self._encode(image, max_width)
+
+    @staticmethod
+    def _encode(image: np.ndarray, max_width: int) -> bytes:
+        """ JPEG для браузера, уменьшенный до max_width. """
+        cv2 = get_cv2()
         if image.shape[1] > max_width:
             scale = max_width / image.shape[1]
             image = cv2.resize(image, (max_width, int(image.shape[0] * scale)), interpolation=cv2.INTER_AREA)
@@ -431,12 +512,17 @@ class WebSession:
         return bytes(buffer.tobytes())
 
     @staticmethod
-    def _draw_region(image: np.ndarray, region: Region) -> None:
+    def _draw_region(image: np.ndarray, region: Region, color: tuple[int, int, int] = (0, 255, 0),
+                     filled: bool = False) -> None:
         cv2 = get_cv2()
         points = np.array(region.polygon, dtype=np.int32)
-        cv2.polylines(image, [points], True, (0, 255, 0), 2)
+        if filled:
+            overlay = image.copy()
+            cv2.fillPoly(overlay, [points], color)
+            cv2.addWeighted(overlay, 0.3, image, 0.7, 0, dst=image)
+        cv2.polylines(image, [points], True, color, 3 if filled else 2)
         x, y = int(region.bbox.x1), int(region.bbox.y1)
-        cv2.putText(image, region.id, (x + 4, y + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        cv2.putText(image, region.id, (x + 4, y + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
     def save(self, index: int, label: str | None, region_ids: list[str] | None, force: bool) -> list[SaveResult]:
         """ Ручное сохранение кадра (все или выбранные зоны). """
@@ -479,7 +565,7 @@ class WebSession:
                 for number, video in enumerate(videos, start=1):
                     if self._auto_stop.is_set():
                         break
-                    self._auto.video, self._auto.index = video.name, number
+                    self._auto.video, self._auto.video_path, self._auto.index = video.name, str(video), number
                     report = self._collect_one(video, predictor)
                     total.videos += report.videos
                     total.frames += report.frames
@@ -501,17 +587,46 @@ class WebSession:
         catalog = self._acquire_catalog(config.catalog.root)
         try:
             with Collector(config, catalog=catalog) as collector:
-                if video == self.video:
-                    collector.add_listener(self._remember)
+                self._auto_regions, self._auto_marks = [], {}
+
+                def on_frame(frame: Frame) -> None:
+                    if self._auto_frame is None or not self._auto_regions:
+                        self._auto_regions = collector.regions_for(frame.width, frame.height)
+                    self._auto_frame = frame
+                    self._auto.frame = frame.index
 
                 def on_result(result: SaveResult) -> None:
                     if result.ok:
                         self._auto.saved += 1
+                    self._auto_marks[result.region_id or FULL_FRAME_ID] = (result.ok, time.monotonic())
 
                 return collect_videos(collector, [video], predictor=predictor, on_result=on_result,
-                                      stop=self._auto_stop)
+                                      stop=self._auto_stop, on_frame=on_frame)
         finally:
             self._release_catalog(config.catalog.root)
+
+    def auto_frame(self, max_width: int = 1280) -> bytes | None:
+        """
+            Кадр, который сейчас обрабатывает автонарезка: зоны зелёные — только что сохранены,
+            красные — только что отказ, жёлтые — без изменений.
+        """
+        frame = self._auto_frame
+        if frame is None:
+            return None
+        cv2 = get_cv2()
+        image = frame.image.copy()
+        now = time.monotonic()
+        for region in self._auto_regions:
+            mark = self._auto_marks.get(region.id)
+            fresh = mark is not None and now - mark[1] <= _MARK_SECONDS
+            color = ((0, 255, 0) if mark and mark[0] else (0, 0, 255)) if fresh else (0, 200, 255)
+            self._draw_region(image, region, color, filled=fresh)
+        if not self._auto_regions:
+            mark = self._auto_marks.get(FULL_FRAME_ID)
+            if mark is not None and now - mark[1] <= _MARK_SECONDS:
+                h, w = image.shape[:2]
+                cv2.rectangle(image, (2, 2), (w - 3, h - 3), (0, 255, 0) if mark[0] else (0, 0, 255), 6)
+        return self._encode(image, max_width)
 
     def config_for_video(self, video: Path) -> CollectorConfig:
         """ Настройки для видео: его папка датасета и его файл зон (рядом с видео или по номеру камеры). """
@@ -553,23 +668,43 @@ class WebSession:
         items: list[dict[str, Any]] = []
         for video in self.playlist_videos():
             found = find_regions_file(video, search_dir)
+            labels = self._label_counts(video)
             items.append({
                 "path": str(video),
                 "name": str(video.relative_to(self.playlist_dir)) if self.playlist_dir else video.name,
-                "saved": self._saved_count(video),
+                "saved": sum(labels.values()) if labels is not None else None,
+                "labels": labels,
+                "rejected": self._rejections.count(str(video)),
                 "regions": found[1] if found is not None else None,
             })
         return {"dir": str(self.playlist_dir) if self.playlist_dir else None, "items": items,
                 "current": str(self.video) if self.video else None}
 
-    def _saved_count(self, video: Path) -> int | None:
-        """ Число сохранённых картинок в папке датасета видео (только при «рядом с видео»). """
+    def _label_counts(self, video: Path) -> dict[str, int] | None:
+        """
+            Сколько картинок в папке датасета видео по папкам классов (классификация)
+            или всего (детекция, сегментация). Только при «рядом с видео»: иначе папка общая для всех видео.
+        """
         if not self.config.catalog.next_to_video:
             return None
-        folder = dataset_dir_for_video(video)
+        folder = self.config.for_video(video).collection_dir
         if not folder.is_dir():
-            return 0
-        return sum(1 for p in folder.rglob("*") if p.suffix.lower() in _IMAGE_EXT and p.is_file())
+            return {}
+
+        def images(path: Path, recursive: bool) -> int:
+            files = path.rglob("*") if recursive else path.iterdir()
+            return sum(1 for p in files if p.suffix.lower() in _IMAGE_EXT and p.is_file())
+
+        if self.config.task != TaskType.CLASSIFY:
+            target = folder / IMAGES_DIR
+            return {IMAGES_DIR: images(target, False)} if target.is_dir() else {}
+        counts: dict[str, int] = {}
+        for child in sorted(folder.iterdir()):
+            if child.is_dir() and not child.name.startswith("."):
+                count = images(child, child.name == SUSPECT_DIR)
+                if count:
+                    counts[child.name] = count
+        return counts
 
     def sync(self) -> SyncReport:
         """ Сверка после ручной проверки. """
@@ -598,9 +733,10 @@ class WebSession:
             "rejected": stats.rejected_by_reason,
         }
 
-    def catalog_file(self, path: str) -> Path:
-        """ Картинка из папки датасета (без выхода за её пределы). """
-        root = self.effective_config().catalog.root.resolve()
+    def catalog_file(self, path: str, video: Path | None = None) -> Path:
+        """ Картинка из папки датасета видео (по умолчанию открытого), без выхода за её пределы. """
+        config = self.config.for_video(video) if video is not None else self.effective_config()
+        root = config.catalog.root.resolve()
         file = Path(path)
         file = (file if file.is_absolute() else root / file).resolve()
         if root not in file.parents or not file.is_file():
@@ -617,3 +753,11 @@ class WebSession:
                 catalog.close()
             self._catalogs.clear()
             self._catalog_users.clear()
+
+
+def _open_in_explorer(folder: Path) -> None:
+    """ Открывает папку в проводнике системы. """
+    if os.name == "nt":
+        os.startfile(folder)  # type: ignore[attr-defined]  # есть только в Windows
+    else:
+        subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(folder)])

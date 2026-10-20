@@ -26,7 +26,7 @@ dependencies = [
 # а одновременная установка с opencv-python-headless ломает cv2.
 opencv = ["opencv-python>=4.8"]
 headless = ["opencv-python-headless>=4.8"]
-web = ["fastapi>=0.110", "uvicorn>=0.27"]
+web = ["fastapi>=0.110", "uvicorn>=0.27", "send2trash>=1.8"]
 
 [project.scripts]
 ndc = "neuro_dataset_collector.cli.main:main"

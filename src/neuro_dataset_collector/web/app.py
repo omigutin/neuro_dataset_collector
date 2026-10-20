@@ -279,12 +279,32 @@ def create_app(session: WebSession) -> FastAPI:
         return {"results": [session.result_to_dict(r) for r in results]}
 
     @app.get("/api/history")
-    def history() -> dict[str, Any]:
-        return {"items": session.history()}
+    def history(video: str = Query(...), offset: int = Query(0, ge=0),
+                limit: int = Query(100, ge=1, le=500)) -> dict[str, Any]:
+        result: dict[str, Any] = _call(lambda: session.history(Path(video), offset, limit))
+        return result
+
+    @app.get("/api/rejected/{rejection_id}.jpg")
+    def rejected_image(rejection_id: int) -> Response:
+        return Response(_call(lambda: session.rejected_image(rejection_id)), media_type="image/jpeg")
+
+    @app.post("/api/sample/{sample_id}/relabel")
+    def relabel(sample_id: int, video: str = Body(...), label: str = Body(...)) -> dict[str, Any]:
+        result: dict[str, Any] = _call(lambda: session.relabel(Path(video), sample_id, label))
+        return result
+
+    @app.post("/api/sample/{sample_id}/delete")
+    def delete_sample(sample_id: int, video: str = Body(..., embed=True)) -> dict[str, Any]:
+        result: dict[str, Any] = _call(lambda: session.delete_sample(Path(video), sample_id))
+        return result
+
+    @app.post("/api/open-folder")
+    def open_folder(video: str = Body(..., embed=True)) -> dict[str, str]:
+        return {"path": str(_call(lambda: session.open_dataset_folder(Path(video))))}
 
     @app.get("/api/file")
-    def catalog_file(path: str = Query(...)) -> FileResponse:
-        return FileResponse(_call(lambda: session.catalog_file(path)))
+    def catalog_file(path: str = Query(...), video: str | None = Query(None)) -> FileResponse:
+        return FileResponse(_call(lambda: session.catalog_file(path, Path(video) if video else None)))
 
     # ---- автонарезка, сверка, выгрузка ----
 
@@ -298,6 +318,13 @@ def create_app(session: WebSession) -> FastAPI:
     def auto_stop() -> dict[str, Any]:
         session.stop_auto()
         return asdict(session.auto_state())
+
+    @app.get("/api/auto/frame")
+    def auto_frame() -> Response:
+        image = session.auto_frame()
+        if image is None:
+            raise HTTPException(404, {"errors": ["Automatic collection has not started"]})
+        return Response(image, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
     @app.get("/api/auto/status")
     def auto_status() -> dict[str, Any]:

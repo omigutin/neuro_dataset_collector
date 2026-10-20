@@ -65,6 +65,7 @@ def collect_videos(
     on_result: Callable[[SaveResult], None] | None = None,
     on_video: Callable[[Path, int, int], None] | None = None,
     stop: threading.Event | None = None,
+    on_frame: Callable[[Frame], None] | None = None,
 ) -> OfflineReport:
     """
         Прогоняет видео через сборщик. Без модели кадры отбираются только по поводам вроде «always»
@@ -92,6 +93,8 @@ def collect_videos(
                 if stop is not None and stop.is_set():
                     break
                 report.frames += 1
+                if on_frame is not None:
+                    on_frame(frame)
                 results = _offer_with_model(collector, frame, predictor) if predictor else collector.offer(frame)
                 for result in results:
                     if result.ok:
