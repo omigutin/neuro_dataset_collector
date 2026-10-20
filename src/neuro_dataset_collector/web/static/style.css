@@ -90,3 +90,12 @@ input.key { text-align: center; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 6px 0; }
 .chip { margin: 0; }
 button:disabled, input:disabled { opacity: .5; cursor: not-allowed; }
+.frame-tools { position: absolute; top: 8px; left: 8px; display: flex; gap: 6px; z-index: 2; opacity: .55; transition: opacity .15s; }
+.frame-wrap:hover .frame-tools, .frame-tools:focus-within, .frame-tools.editing { opacity: 1; }
+.frame-tools[hidden] { display: none; }
+.frame-tools button { background: rgba(17, 17, 17, .65); color: #fff; border: 1px solid rgba(255, 255, 255, .35); border-radius: 8px;
+  width: 38px; height: 38px; padding: 0; font-size: 18px; line-height: 1; backdrop-filter: blur(2px); }
+.frame-tools button:hover { border-color: #fff; background: rgba(17, 17, 17, .85); }
+.frame-tools button.active { background: rgba(37, 99, 235, .85); border-color: #fff; opacity: 1; }
+.frame-tools button[hidden] { display: none; }
+.frame-tools button:disabled { opacity: .35; }

@@ -254,3 +254,18 @@ def test_interface_files_are_not_cached(client: TestClient) -> None:
     assert page.headers["cache-control"] == "no-cache"
     assert "/static/app.js?v=" in page.text and "{{version}}" not in page.text
     assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
+
+
+def test_rectangle_becomes_polygon_and_points_change(client: TestClient, workspace: Path) -> None:
+    video = workspace / "ml_cam25_0101.avi"
+    client.post("/api/video/open", json={"path": str(video)})
+    five = [[0, 0], [16, 0], [32, 0], [32, 24], [0, 24]]
+    info = client.post("/api/video/regions/edit", json={"regions": {"1": {"points": five, "shape": "polygon"}}}).json()
+    assert info["regions"][0]["shape"] == "polygon" and len(info["regions"][0]["polygon"]) == 5
+    shape = json.loads((workspace / "ml_cam25_0101.json").read_text(encoding="utf-8"))["shapes"][0]
+    assert shape["shape_type"] == "polygon" and len(shape["points"]) == 5 and shape["wz"] == 1
+    # Точку удалили — осталось 4; меньше трёх нельзя.
+    four = {"1": {"points": five[:2] + five[3:], "shape": "polygon"}}
+    assert len(client.post("/api/video/regions/edit", json={"regions": four}).json()["regions"][0]["polygon"]) == 4
+    two = {"1": {"points": five[:2], "shape": "polygon"}}
+    assert client.post("/api/video/regions/edit", json={"regions": two}).status_code == 400

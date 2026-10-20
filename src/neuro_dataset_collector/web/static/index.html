@@ -33,8 +33,6 @@
         <span class="source-label">Зоны</span>
         <span id="regions-path" class="path muted">весь кадр</span>
         <span class="buttons">
-          <button id="edit-regions" title="Двигать зоны и менять их размер прямо на кадре">Править зоны</button>
-          <button id="save-regions-as" title="Сохранить текущую разметку в файл (например, перезаписать файл камеры)">Сохранить разметку в…</button>
           <button id="pick-regions">Файл разметки…</button>
           <button id="no-regions" title="Сохранять кадр целиком">Весь кадр</button>
         </span>
@@ -60,13 +58,19 @@
         <div class="frame-wrap">
           <img id="frame" alt="">
           <canvas id="editor" hidden></canvas>
+          <div id="frame-tools" class="frame-tools" hidden>
+            <button id="edit-toggle" title="Править зоны">✏️</button>
+            <button id="edit-undo" title="Отменить последнее действие (Ctrl+Z)" hidden>↶</button>
+            <button id="edit-cancel" title="Выйти без сохранения (Esc)" hidden>✖</button>
+            <button id="save-regions-as" title="Сохранить разметку в файл… (например, перезаписать файл камеры)">⤓</button>
+          </div>
         </div>
         <div id="frame-placeholder" class="placeholder">Выберите папку с видео или одно видео</div>
         <div id="edit-bar" class="edit-bar" hidden>
           <strong>Правка зон</strong>
-          <span class="muted">тяните за точки и стороны, внутри зоны — перенос · стрелки — сдвиг выбранной зоны (Shift — на 10) · Tab — следующая зона · Enter — применить · Esc — отменить</span>
-          <button id="edit-apply" class="primary">Применить</button>
-          <button id="edit-cancel">Отменить</button>
+          <span class="muted">тяните за точки и стороны, за середину — перенос · «+» на стороне или двойной щелчок по стороне —
+            новая точка · двойной щелчок по точке или Delete — удалить точку · стрелки — сдвиг зоны (Shift — на 10) ·
+            Tab — следующая зона · Ctrl+Z — отменить · 💾 или Enter — сохранить · ✖ или Esc — выйти без сохранения</span>
         </div>
         <div class="controls">
           <button id="prev" title="← шаг назад">⏮</button>

@@ -18,6 +18,7 @@ __all__ = [
     "LabelMeRegions",
     "RegionProvider",
     "RegionsOrigin",
+    "ShapeKind",
     "StaticRegions",
     "create_region_provider",
     "find_regions_file",
@@ -28,6 +29,8 @@ __all__ = [
 
 # Откуда взят файл разметки видео: рядом с видео или из папки разметки по номеру камеры.
 RegionsOrigin = Literal["video", "camera"]
+# Тип фигуры зоны в файле разметки.
+ShapeKind = Literal["rectangle", "polygon"]
 
 _log = logging.getLogger("neuro_dataset_collector")
 
@@ -174,11 +177,18 @@ class LabelMeRegions:
         shape_type = str(shape.get("shape_type", "polygon"))
         return shape_type == "rectangle" or (shape_type == "polygon" and isinstance(points, list) and len(points) == 2)
 
-    def edited(self, edits: Mapping[str, Sequence[Point]], width: int, height: int) -> dict[str, Any]:
+    def edited(
+        self,
+        edits: Mapping[str, Sequence[Point]],
+        width: int,
+        height: int,
+        shapes: Mapping[str, ShapeKind] | None = None,
+    ) -> dict[str, Any]:
         """
             Содержимое файла разметки с исправленными зонами.
             edits — новые контуры зон в координатах кадра width × height; остальные фигуры не меняются.
-            Прямоугольник остаётся прямоугольником (записывается двумя углами).
+            shapes — новый тип фигуры зоны ('polygon' — прямоугольник стал многоугольником);
+            без него тип прежний: прямоугольник записывается двумя углами.
         """
         data: dict[str, Any] = json.loads(json.dumps(self._data))
         image_w, image_h = self._image_size or (width, height)
@@ -190,15 +200,18 @@ class LabelMeRegions:
             scaled = [(min(max(float(x) * sx, 0.0), image_w), min(max(float(y) * sy, 0.0), image_h))
                       for x, y in points]
             shape = data["shapes"][index]
-            if self._is_rectangle(shape):
+            kind = (shapes or {}).get(region_id) or ("rectangle" if self._is_rectangle(shape) else "polygon")
+            if kind == "rectangle":
                 xs, ys = [x for x, _ in scaled], [y for _, y in scaled]
                 if not xs or max(xs) <= min(xs) or max(ys) <= min(ys):
                     raise ValueError(f"Region {region_id} has zero area")
                 shape["points"] = [[min(xs), min(ys)], [max(xs), max(ys)]]
+                shape["shape_type"] = "rectangle"
             else:
                 if len(scaled) < 3:
                     raise ValueError(f"Region {region_id} must have at least 3 points")
                 shape["points"] = [[x, y] for x, y in scaled]
+                shape["shape_type"] = "polygon"
         return data
 
 

@@ -25,6 +25,7 @@ from ..predictors.base import create_predictor
 from ..regions.providers import (
     LabelMeRegions,
     RegionsOrigin,
+    ShapeKind,
     find_regions_file,
     sidecar_regions_file,
     suggest_regions_file,
@@ -365,10 +366,11 @@ class WebSession:
         labelme = self._labelme()
         return labelme.shape_types() if labelme is not None else {}
 
-    def edit_regions(self, edits: dict[str, list[Point]]) -> dict[str, Any]:
+    def edit_regions(self, edits: dict[str, list[Point]], shapes: dict[str, ShapeKind] | None = None) -> dict[str, Any]:
         """
-            Применяет исправленные зоны (координаты кадра): файл разметки с ними сохраняется
-            рядом с видео под его именем и становится текущим. Исходный файл не меняется.
+            Применяет исправленные зоны (координаты кадра; shapes — новый тип фигуры, если менялся):
+            файл разметки с ними сохраняется рядом с видео под его именем и становится текущим.
+            Исходный файл не меняется.
         """
         with self._lock:
             if self.video is None:
@@ -379,7 +381,7 @@ class WebSession:
             first = self._get_reader().read(0)
             if first is None:
                 raise ValueError("Video has no frames")
-            data = labelme.edited(edits, first.width, first.height)
+            data = labelme.edited(edits, first.width, first.height, shapes)
             target = sidecar_regions_file(self.video)
             write_labelme(data, target)
             self._close_collector()

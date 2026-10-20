@@ -20,6 +20,7 @@ from pydantic import BaseModel, ValidationError
 
 from .. import __version__
 from ..config.models import NAME_PATTERN, dataset_dir_for_video
+from ..regions.providers import ShapeKind
 from .picker import pick_path
 from .session import AutoScope, WebSession
 
@@ -53,10 +54,30 @@ class PickRequest(BaseModel):
     title: str = ""
 
 
-class RegionsEditRequest(BaseModel):
-    """ Исправленные зоны: номер зоны → точки контура в координатах кадра. """
+class RegionEdit(BaseModel):
+    """ Исправленная зона: точки контура в координатах кадра и тип фигуры (если менялся). """
 
-    regions: dict[str, list[tuple[float, float]]]
+    points: list[tuple[float, float]]
+    shape: ShapeKind | None = None
+
+
+class RegionsEditRequest(BaseModel):
+    """ Исправленные зоны: номер зоны → зона (или просто список точек). """
+
+    regions: dict[str, RegionEdit | list[tuple[float, float]]]
+
+    def edits(self) -> tuple[dict[str, list[tuple[float, float]]], dict[str, ShapeKind]]:
+        """ Точки и новые типы фигур по номерам зон. """
+        points: dict[str, list[tuple[float, float]]] = {}
+        shapes: dict[str, ShapeKind] = {}
+        for region_id, edit in self.regions.items():
+            if isinstance(edit, RegionEdit):
+                points[region_id] = list(edit.points)
+                if edit.shape is not None:
+                    shapes[region_id] = edit.shape
+            else:
+                points[region_id] = list(edit)
+        return points, shapes
 
 
 class AutoRequest(BaseModel):
@@ -214,8 +235,8 @@ def create_app(session: WebSession) -> FastAPI:
 
     @app.post("/api/video/regions/edit")
     def edit_regions(request: RegionsEditRequest) -> dict[str, Any]:
-        result: dict[str, Any] = _call(lambda: session.edit_regions(
-            {region_id: [(x, y) for x, y in points] for region_id, points in request.regions.items()}))
+        points, shapes = request.edits()
+        result: dict[str, Any] = _call(lambda: session.edit_regions(points, shapes))
         return result
 
     @app.get("/api/video/regions/save-target")
