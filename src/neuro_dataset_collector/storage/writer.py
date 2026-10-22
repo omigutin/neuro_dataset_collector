@@ -46,6 +46,8 @@ class MoveJob:
     source: Path
     target: Path
     on_done: Callable[[Exception | None], None] | None = None
+    # Нет исходного файла — не ошибка (например, полного кадра к вырезу могло не быть).
+    missing_ok: bool = False
 
 
 Job = WriteJob | MoveJob
@@ -63,6 +65,8 @@ def _execute(job: Job) -> None:
     """ Выполняет одно задание записи. """
     if isinstance(job, MoveJob):
         if not job.source.exists():
+            if job.missing_ok:
+                return
             raise FileNotFoundError(f"File to move not found: {job.source}")
         job.target.parent.mkdir(parents=True, exist_ok=True)
         os.replace(job.source, job.target)

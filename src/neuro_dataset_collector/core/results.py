@@ -68,6 +68,16 @@ class SyncReport:
     unknown_files: list[Path] = field(default_factory=list)
     unknown_labels: set[str] = field(default_factory=set)
 
+    def merge(self, other: SyncReport) -> None:
+        """ Добавляет итог сверки ещё одной коллекции (например, другого видео). """
+        self.verified += other.verified
+        self.relabeled += other.relabeled
+        self.rejected += other.rejected
+        self.still_suspect += other.still_suspect
+        self.unsorted += other.unsorted
+        self.unknown_files.extend(other.unknown_files)
+        self.unknown_labels |= other.unknown_labels
+
     def summary(self) -> str:
         """ Короткое описание итога для человека. """
         lines = [
@@ -91,8 +101,21 @@ class ExportReport:
     out_dir: Path
     exported: int = 0
     by_label: dict[str, int] = field(default_factory=dict)
+    frames: int = 0
+    frames_dir: Path | None = None
 
     def summary(self) -> str:
         """ Короткое описание итога для человека. """
         parts = ", ".join(f"{label}: {count}" for label, count in sorted(self.by_label.items()))
-        return f"Выгружено {self.exported} файлов в {self.out_dir}" + (f" ({parts})" if parts else "")
+        text = f"Выгружено {self.exported} файлов в {self.out_dir}" + (f" ({parts})" if parts else "")
+        if self.frames:
+            text += f"\nПолных кадров: {self.frames} в {self.frames_dir}"
+        return text
+
+    def merge(self, other: ExportReport) -> None:
+        """ Добавляет итог выгрузки ещё одной коллекции (например, другого видео) в ту же папку. """
+        self.exported += other.exported
+        self.frames += other.frames
+        self.frames_dir = self.frames_dir or other.frames_dir
+        for label, count in other.by_label.items():
+            self.by_label[label] = self.by_label.get(label, 0) + count

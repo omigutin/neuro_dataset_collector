@@ -367,26 +367,36 @@ class Catalog:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def label_counts(self, collection: str, statuses: Sequence[SampleStatus] | None = None) -> dict[str, int]:
-        """ Количество записей по классам (по умолчанию — без отклонённых и сбойных). """
+    def label_counts(
+        self, collection: str, statuses: Sequence[SampleStatus] | None = None, source: str | None = None
+    ) -> dict[str, int]:
+        """ Количество записей по классам (по умолчанию — без отклонённых и сбойных); source — одно видео. """
         values = [s.value for s in statuses] if statuses else [
             SampleStatus.PENDING.value, SampleStatus.SUSPECT.value, SampleStatus.VERIFIED.value,
         ]
+        where, params = self._where(collection, source)
         with self._lock:
             rows = self._conn.execute(
-                f"SELECT COALESCE(label, ''), COUNT(*) FROM samples WHERE collection = ? "
+                f"SELECT COALESCE(label, ''), COUNT(*) FROM samples WHERE {where} "
                 f"AND status IN ({','.join('?' for _ in values)}) GROUP BY label",
-                [collection, *values],
+                [*params, *values],
             ).fetchall()
         return {str(row[0]): int(row[1]) for row in rows}
 
-    def status_counts(self, collection: str) -> dict[str, int]:
-        """ Количество записей по состояниям. """
+    def status_counts(self, collection: str, source: str | None = None) -> dict[str, int]:
+        """ Количество записей по состояниям; source — одно видео. """
+        where, params = self._where(collection, source)
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT status, COUNT(*) FROM samples WHERE collection = ? GROUP BY status", (collection,)
-            ).fetchall()
+            rows = self._conn.execute(f"SELECT status, COUNT(*) FROM samples WHERE {where} GROUP BY status",
+                                      params).fetchall()
         return {str(row[0]): int(row[1]) for row in rows}
+
+    @staticmethod
+    def _where(collection: str, source: str | None) -> tuple[str, list[object]]:
+        """ Условие выборки: коллекция и, если задано, одно видео. """
+        if source is None:
+            return "collection = ?", [collection]
+        return "collection = ? AND source = ?", [collection, source]
 
     def filenames(self, collection: str) -> set[str]:
         """ Имена файлов коллекции — для уникальности новых имён. """

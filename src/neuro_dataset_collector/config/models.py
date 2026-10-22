@@ -138,6 +138,8 @@ class RegionsConfig(_Model):
     source: RegionSource = RegionSource.NONE
     file: Path | None = None
     labels: list[str] = Field(default_factory=list)
+    # Только эти зоны (номера зон); пусто — все подходящие по меткам.
+    ids: list[str] = Field(default_factory=list)
     search_dir: Path | None = None
     where: dict[str, str | int | float | bool] = Field(default_factory=dict)
     id_field: str | None = None
@@ -283,6 +285,9 @@ class AutoConfig(_Model):
     """ Автоматический отбор: поводы сохранить (любой) и ограничения (все), плюс особые правила по классам. """
 
     enabled: bool = True
+    # Как часто проверять кадр при офлайн-нарезке, в секундах видео. None — без модели раз в интервал
+    # ограничения «не чаще» (чаще проверять незачем), с моделью — каждый source.step-й кадр.
+    check_every_seconds: float | None = Field(default=None, gt=0)
     triggers: list[Trigger] = Field(default_factory=_default_triggers)
     limits: list[Limit] = Field(default_factory=_default_limits)
     per_label: dict[str, LabelOverride] = Field(default_factory=dict)
@@ -309,6 +314,7 @@ class StorageConfig(_Model):
     filename: str = "{source}_r{region}_f{frame:06d}"
     image_format: ImageFormat = ImageFormat.JPG
     jpeg_quality: int = Field(default=95, ge=10, le=100)
+    # Сохранять к каждому вырезу полный кадр: та же раскладка по классам в папке _frames.
     keep_source_frame: bool = False
     min_free_gb: float = Field(default=1.0, ge=0.0)
 

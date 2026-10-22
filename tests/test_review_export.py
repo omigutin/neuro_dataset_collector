@@ -168,3 +168,56 @@ def test_cli_init(tmp_path: Path) -> None:
     assert main(["init", str(target)]) == 0
     assert "classes" in target.read_text(encoding="utf-8")
     assert main(["init", str(target)]) == 1
+
+
+def test_full_frame_twin_follows_crop(make_config: ConfigFactory, tmp_path: Path) -> None:
+    from neuro_dataset_collector.core import Region
+    from neuro_dataset_collector.regions import StaticRegions
+    from neuro_dataset_collector.review import relabel_sample, sample_files
+    from neuro_dataset_collector.storage import frame_twin
+
+    config = make_config(storage={"min_free_gb": 0, "keep_source_frame": True})
+    zone = Region.from_bbox("1", BBox(0, 0, 32, 24))
+    with Collector(config, region_provider=StaticRegions([zone])) as collector:
+        first = collector.save(make_frame(1), "FULL")[0]
+        second = collector.save(make_frame(2), "FULL")[0]
+    assert first.path is not None and second.path is not None
+    twin = frame_twin(config.collection_dir, first.path)
+    assert twin == config.collection_dir / "_frames" / "FULL" / first.path.name and twin.exists()
+    # Перенос в другой класс из истории переносит и полный кадр.
+    with Catalog(config.catalog.root) as catalog:
+        moved = relabel_sample(config, catalog, first.sample_id or 0, "EMPTY")
+        assert frame_twin(config.collection_dir, moved).exists() and not twin.exists()
+        assert len(sample_files(config, catalog, first.sample_id or 0)) == 2
+    # Перенос руками в проводнике + сверка — полный кадр едет следом.
+    (config.collection_dir / "UNKNOWN").mkdir()
+    shutil.move(second.path, config.collection_dir / "UNKNOWN" / second.path.name)
+    sync_collection(config)
+    assert (config.collection_dir / "_frames" / "UNKNOWN" / second.path.name).exists()
+    report = export_dataset(config, tmp_path / "out", full_frames=True)
+    assert report.exported == 2 and report.frames == 2
+    assert (tmp_path / "out_frames" / "EMPTY" / moved.name).exists()
+
+
+def test_region_ids_filter(tmp_path: Path) -> None:
+    import json
+
+    from neuro_dataset_collector.regions import LabelMeRegions
+
+    path = tmp_path / "zones.json"
+    path.write_text(json.dumps({"shapes": [
+        {"label": "crop", "points": [[0, 0], [10, 10]], "shape_type": "rectangle"},
+        {"label": "crop", "points": [[20, 0], [30, 10]], "shape_type": "rectangle"},
+    ]}), encoding="utf-8")
+    assert [r.id for r in LabelMeRegions(path, ids=["crop1"]).regions(64, 48)] == ["crop1"]
+
+
+def test_sampling_step() -> None:
+    from neuro_dataset_collector.pipeline.offline import sampling_step
+
+    base = CollectorConfig.model_validate({"source": {"step": 3},
+                                           "auto": {"limits": [{"type": "interval", "seconds": 1.0}]}})
+    assert sampling_step(base, 25.4, with_model=False) == 26     # раз в интервал «не чаще», с запасом вверх
+    assert sampling_step(base, 25.0, with_model=True) == 3      # с моделью — source.step
+    base.auto.check_every_seconds = 0.2
+    assert sampling_step(base, 60.0, with_model=True) == 12

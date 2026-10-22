@@ -8,7 +8,7 @@ from pathlib import Path
 from ..catalog.catalog import Catalog, SampleRecord
 from ..config.models import CollectorConfig, TaskType
 from ..core.types import SampleStatus
-from ..storage.layout import PathPlanner
+from ..storage.layout import PathPlanner, frame_twin
 
 __all__ = ["reject_sample", "relabel_sample", "sample_files"]
 
@@ -31,6 +31,9 @@ def sample_files(config: CollectorConfig, catalog: Catalog, sample_id: int) -> l
     record = _editable(catalog, sample_id)
     image = catalog.absolute(record)
     files = [image] if image.exists() else []
+    twin = frame_twin(config.collection_dir, image)
+    if twin.exists():
+        files.append(twin)
     if config.task != TaskType.CLASSIFY:
         label = PathPlanner(config, set()).label_path(image)
         if label.exists():
@@ -57,9 +60,18 @@ def relabel_sample(config: CollectorConfig, catalog: Catalog, sample_id: int, la
             raise FileExistsError(f"File already exists: {target}")
         target.parent.mkdir(parents=True, exist_ok=True)
         os.replace(source, target)
+        _move_twin(config, source, target)
     catalog.update(sample_id, origin="manual_relabel", path=catalog.relative(target), label=label,
                    status=SampleStatus.VERIFIED, reviewed=True)
     return target
+
+
+def _move_twin(config: CollectorConfig, source: Path, target: Path) -> None:
+    """ Переносит полный кадр вслед за вырезом (если он сохранялся). """
+    old, new = frame_twin(config.collection_dir, source), frame_twin(config.collection_dir, target)
+    if old.exists() and not new.exists():
+        new.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(old, new)
 
 
 def reject_sample(catalog: Catalog, sample_id: int) -> None:

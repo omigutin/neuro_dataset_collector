@@ -101,6 +101,8 @@ class ExportRequest(BaseModel):
     out_dir: str
     only_new: bool = True
     include_pending: bool = False
+    full_frames: bool = False
+    scope: AutoScope = "video"
 
 
 def _errors(error: ValidationError) -> list[str]:
@@ -129,7 +131,7 @@ def _call(action: Callable[[], Any]) -> Any:
 
 def _static_version() -> str:
     """ Метка версии файлов интерфейса: меняется при обновлении программы и при правке файлов. """
-    stamp = max(int(path.stat().st_mtime) for path in _STATIC.iterdir() if path.is_file())
+    stamp = max(int(path.stat().st_mtime) for path in _STATIC.rglob("*") if path.is_file())
     return f"{__version__}-{stamp}"
 
 
@@ -273,6 +275,11 @@ def create_app(session: WebSession) -> FastAPI:
         result: dict[str, Any] = _call(lambda: session.set_playlist(Path(path) if path else None))
         return result
 
+    @app.post("/api/video/zones")
+    def set_zones(ids: list[str] = Body(..., embed=True)) -> dict[str, Any]:
+        result: dict[str, Any] = _call(lambda: session.set_zones(ids))
+        return result
+
     @app.post("/api/video/position")
     def remember_frame(frame: int = Body(..., embed=True)) -> dict[str, int]:
         session.remember_frame(frame)
@@ -344,13 +351,13 @@ def create_app(session: WebSession) -> FastAPI:
         return asdict(session.auto_state())
 
     @app.get("/api/stats")
-    def stats() -> dict[str, Any]:
-        result: dict[str, Any] = _call(session.stats)
+    def stats(scope: AutoScope = Query("video")) -> dict[str, Any]:
+        result: dict[str, Any] = _call(lambda: session.stats(scope))
         return result
 
     @app.post("/api/sync")
-    def sync() -> dict[str, Any]:
-        report = _call(session.sync)
+    def sync(scope: AutoScope = Body("video", embed=True)) -> dict[str, Any]:
+        report = _call(lambda: session.sync(scope))
         return {
             "summary": report.summary(),
             "verified": report.verified,
@@ -364,8 +371,10 @@ def create_app(session: WebSession) -> FastAPI:
 
     @app.post("/api/export")
     def export(request: ExportRequest) -> dict[str, Any]:
-        report = _call(lambda: session.export(Path(request.out_dir), request.only_new, request.include_pending))
-        return {"summary": report.summary(), "exported": report.exported, "by_label": report.by_label}
+        report = _call(lambda: session.export(Path(request.out_dir), request.only_new, request.include_pending,
+                                              request.full_frames, request.scope))
+        return {"summary": report.summary(), "exported": report.exported, "by_label": report.by_label,
+                "frames": report.frames}
 
     return app
 

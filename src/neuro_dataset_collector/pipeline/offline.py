@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..config.models import PredictionsSpace
+from ..config.models import CollectorConfig, IntervalLimit, PredictionsSpace
 from ..core.results import SaveResult
 from ..core.types import Frame, Region
 from ..imaging.crop import crop_region
@@ -17,7 +18,7 @@ from ..predictors.base import Predictor
 from ..sources.video import VideoReader, list_videos
 from .collector import Collector
 
-__all__ = ["OfflineReport", "collect_videos"]
+__all__ = ["OfflineReport", "collect_videos", "sampling_step"]
 
 _log = logging.getLogger("neuro_dataset_collector")
 
@@ -57,6 +58,22 @@ def _offer_with_model(collector: Collector, frame: Frame, predictor: Predictor) 
     return results
 
 
+def sampling_step(config: CollectorConfig, fps: float, with_model: bool) -> int:
+    """
+        Через сколько кадров проверять видео при офлайн-нарезке.
+        Задано auto.check_every_seconds — по нему. Без модели — раз в интервал ограничения «не чаще»:
+        кадры между ними всё равно были бы отклонены. Иначе — source.step.
+    """
+    seconds = config.auto.check_every_seconds
+    if seconds is None and not with_model:
+        interval = next((lim for lim in config.auto.limits if isinstance(lim, IntervalLimit)), None)
+        seconds = interval.seconds if interval is not None and interval.frames is None else None
+    if seconds is None or fps <= 0:
+        return config.source.step
+    # С запасом вверх: при округлении вниз интервал «не чаще» отклонял бы каждый второй кадр.
+    return max(1, math.ceil(fps * seconds - 1e-6))
+
+
 def collect_videos(
     collector: Collector,
     videos: Sequence[Path] | None = None,
@@ -89,7 +106,7 @@ def collect_videos(
             continue
         report.videos += 1
         with reader:
-            for frame in reader.frames(step=config.source.step):
+            for frame in reader.frames(step=sampling_step(config, reader.fps, predictor is not None)):
                 if stop is not None and stop.is_set():
                     break
                 report.frames += 1

@@ -27,6 +27,8 @@ class SessionState(BaseModel):
     frame: int = 0
     # Последний кадр каждого видео: при возврате к видео продолжаем с того же места.
     positions: dict[str, int] = Field(default_factory=dict)
+    # Какие зоны резать: файл разметки (камера) → номера зон.
+    zones: dict[str, list[str]] = Field(default_factory=dict)
 
 
 def app_dir() -> Path:

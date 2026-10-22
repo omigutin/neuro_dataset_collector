@@ -9,7 +9,7 @@ from pathlib import Path
 
 from ..config.models import CollectorConfig, TaskType
 
-__all__ = ["FRAMES_DIR", "IMAGES_DIR", "LABELS_DIR", "SUSPECT_DIR", "PathPlanner", "safe_name"]
+__all__ = ["FRAMES_DIR", "IMAGES_DIR", "LABELS_DIR", "SUSPECT_DIR", "PathPlanner", "frame_twin", "safe_name"]
 
 SUSPECT_DIR = "_suspect"
 FRAMES_DIR = "_frames"
@@ -60,9 +60,9 @@ class PathPlanner:
         """ Файл разметки YOLO для картинки (детекция/сегментация). """
         return self._dir / LABELS_DIR / (image_path.stem + ".txt")
 
-    def frame_path(self, source: str, frame_index: int) -> Path:
-        """ Путь для полного кадра (опция keep_source_frame). """
-        return self._dir / FRAMES_DIR / f"{safe_name(source)}_f{frame_index:06d}{self.extension}"
+    def frame_path(self, image_path: Path) -> Path:
+        """ Путь для полного кадра к вырезу (опция keep_source_frame). """
+        return frame_twin(self._dir, image_path)
 
     def filename(
         self,
@@ -98,3 +98,11 @@ class PathPlanner:
     def release(self, name: str) -> None:
         """ Освобождает имя, если сохранение не состоялось. """
         self._reserved.discard(name)
+
+
+def frame_twin(collection_dir: Path, image_path: Path) -> Path:
+    """
+        Полный кадр к вырезу: та же раскладка внутри папки _frames
+        (<коллекция>/FULL/x.jpg → <коллекция>/_frames/FULL/x.jpg).
+    """
+    return collection_dir / FRAMES_DIR / image_path.relative_to(collection_dir)

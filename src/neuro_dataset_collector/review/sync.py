@@ -9,7 +9,7 @@ from ..catalog.catalog import Catalog, SampleRecord
 from ..config.models import CollectorConfig, TaskType
 from ..core.results import SyncReport
 from ..core.types import SampleStatus
-from ..storage.layout import FRAMES_DIR, IMAGES_DIR, LABELS_DIR, SUSPECT_DIR
+from ..storage.layout import FRAMES_DIR, IMAGES_DIR, LABELS_DIR, SUSPECT_DIR, frame_twin
 
 __all__ = ["sync_collection"]
 
@@ -46,6 +46,17 @@ def _place(config: CollectorConfig, path: Path) -> tuple[str, str | None]:
     if parts[0] == config.unsorted_label:
         return "unsorted", None
     return "label", parts[0]
+
+
+def _follow_twin(config: CollectorConfig, old: Path, new: Path) -> None:
+    """ Вырез перенесли вручную — полный кадр к нему переносится так же (если он есть). """
+    try:
+        source, target = frame_twin(config.collection_dir, old), frame_twin(config.collection_dir, new)
+    except ValueError:
+        return
+    if source.exists() and not target.exists():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source.replace(target)
 
 
 def sync_collection(config: CollectorConfig, catalog: Catalog | None = None) -> SyncReport:
@@ -87,6 +98,8 @@ def _sync_record(
             report.rejected += 1
         return
     relative = catalog.relative(path)
+    if relative != record.path:
+        _follow_twin(config, catalog.absolute(record), path)
     place, label = _place(config, path)
     if place == "suspect":
         report.still_suspect += 1

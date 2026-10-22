@@ -252,8 +252,8 @@ def test_single_video_fills_playlist_with_its_folder(client: TestClient, workspa
 def test_interface_files_are_not_cached(client: TestClient) -> None:
     page = client.get("/")
     assert page.headers["cache-control"] == "no-cache"
-    assert "/static/app.js?v=" in page.text and "{{version}}" not in page.text
-    assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
+    assert "/static/js/main.js?v=" in page.text and "{{version}}" not in page.text
+    assert client.get("/static/js/main.js").headers["cache-control"] == "no-cache"
 
 
 def test_rectangle_becomes_polygon_and_points_change(client: TestClient, workspace: Path) -> None:
@@ -348,3 +348,35 @@ def test_find_port_skips_busy_and_detects_running_collector(client: TestClient) 
     finally:
         busy.close()
     assert client.get("/api/ping").json()["app"] == app_module.APP_ID
+
+
+def test_zone_selection_remembered_per_camera(client: TestClient, workspace: Path) -> None:
+    first, second = workspace / "ml_cam25_0101.avi", _video(workspace / "ml_cam25_0202.avi")
+    info = client.post("/api/video/open", json={"path": str(first)}).json()
+    assert [(s["id"], s["selected"]) for s in info["shapes"]] == [("1", True), ("2", True)]
+    info = client.post("/api/video/zones", json={"ids": ["2"]}).json()
+    assert [r["id"] for r in info["regions"]] == ["2"]
+    assert [(s["id"], s["selected"]) for s in info["shapes"]] == [("1", False), ("2", True)]
+    saved = client.post("/api/save", json={"frame": 2, "label": "FULL"}).json()["results"]
+    assert [r["region"] for r in saved] == ["2"]
+    # Та же камера в другом видео — тот же выбор.
+    assert [r["id"] for r in client.post("/api/video/open", json={"path": str(second)}).json()["regions"]] == ["2"]
+    assert client.post("/api/video/zones", json={"ids": []}).status_code == 400
+    assert client.post("/api/video/zones", json={"ids": ["9"]}).status_code == 400
+
+
+def test_stats_sync_export_for_playlist(client: TestClient, workspace: Path) -> None:
+    first, second = workspace / "ml_cam25_0101.avi", _video(workspace / "ml_cam25_0202.avi")
+    client.post("/api/playlist", json={"path": str(workspace)})
+    for video, label in ((first, "EMPTY"), (second, "FULL")):
+        client.post("/api/video/open", json={"path": str(video)})
+        client.post("/api/save", json={"frame": 1, "label": label})
+    stats = client.get("/api/stats", params={"scope": "playlist"}).json()
+    assert [row["labels"] for row in stats["rows"]] == [{"EMPTY": 2}, {"FULL": 2}]
+    assert stats["labels"] == {"EMPTY": 2, "FULL": 2} and stats["statuses"] == {"pending": 4}
+    assert client.get("/api/stats").json()["labels"] == {"FULL": 2}
+    assert client.post("/api/sync", json={"scope": "playlist"}).json()["verified"] == 4
+    out = workspace / "export"
+    exported = client.post("/api/export", json={"out_dir": str(out), "scope": "playlist"}).json()
+    assert exported["exported"] == 4 and exported["by_label"] == {"EMPTY": 2, "FULL": 2}
+    assert len(list((out / "FULL").iterdir())) == 2 and len(list((out / "EMPTY").iterdir())) == 2

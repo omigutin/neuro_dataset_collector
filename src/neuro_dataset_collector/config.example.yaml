@@ -63,7 +63,7 @@ storage:
   filename: "{source}_r{region}_f{frame:06d}"   # поля: source region frame label conf mode date time collection
   image_format: jpg
   jpeg_quality: 95
-  keep_source_frame: false       # дополнительно сохранять полный кадр (в папку _frames)
+  keep_source_frame: false       # к каждому вырезу — полный кадр (_frames/<класс>/, то же имя)
   min_free_gb: 1.0               # не сохранять, если на диске меньше этого места
 
 # Режим работы.

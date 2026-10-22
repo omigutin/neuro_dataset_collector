@@ -13,11 +13,17 @@ from ..catalog.catalog import Catalog
 from ..config.models import CollectorConfig, TaskType
 from ..core.results import ExportReport
 from ..core.types import SampleStatus
-from ..storage.layout import IMAGES_DIR, LABELS_DIR
+from ..storage.layout import IMAGES_DIR, LABELS_DIR, frame_twin
 
-__all__ = ["export_dataset"]
+__all__ = ["export_dataset", "frames_export_dir"]
 
 _log = logging.getLogger("neuro_dataset_collector")
+
+
+def frames_export_dir(out_dir: Path) -> Path:
+    """ Папка выгрузки полных кадров рядом с папкой вырезов. """
+    out_dir = Path(out_dir)
+    return out_dir.with_name(f"{out_dir.name}_frames")
 
 
 def export_dataset(
@@ -26,6 +32,7 @@ def export_dataset(
     *,
     only_new: bool = True,
     include_pending: bool = False,
+    full_frames: bool = False,
     catalog: Catalog | None = None,
 ) -> ExportReport:
     """
@@ -33,11 +40,12 @@ def export_dataset(
         Классификация: out_dir/<класс>/файлы — Roboflow сам разложит по классам по именам папок.
         Детекция и сегментация: out_dir/images, out_dir/labels и data.yaml (формат YOLO).
         По умолчанию — только проверенные (после sync) и ещё не выгруженные.
+        full_frames — также полные кадры (если сохранялись) в соседнюю папку «<out_dir>_frames» с той же раскладкой.
     """
     own = catalog is None
     catalog = catalog or Catalog(config.catalog.root)
     out_dir = Path(out_dir)
-    report = ExportReport(out_dir=out_dir)
+    report = ExportReport(out_dir=out_dir, frames_dir=frames_export_dir(out_dir) if full_frames else None)
     statuses = [SampleStatus.VERIFIED] + ([SampleStatus.PENDING] if include_pending else [])
     counts: Counter[str] = Counter()
     exported_ids: list[int] = []
@@ -61,6 +69,12 @@ def export_dataset(
                     shutil.copy2(label_file, out_dir / LABELS_DIR / label_file.name)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
+            twin = frame_twin(config.collection_dir, source)
+            if report.frames_dir is not None and twin.exists():
+                frame_target = report.frames_dir / target.relative_to(out_dir)
+                frame_target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(twin, frame_target)
+                report.frames += 1
             counts[record.label or ""] += 1
             if record.id is not None:
                 exported_ids.append(record.id)

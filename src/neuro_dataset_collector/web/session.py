@@ -64,6 +64,7 @@ class AutoRunState:
     video: str = ""
     video_path: str = ""
     frame: int = 0
+    video_frames: int = 0
     index: int = 0
     total: int = 0
     saved: int = 0
@@ -85,6 +86,7 @@ class WebSession:
     video: Path | None = None
     frame: int = 0
     _positions: dict[str, int] = field(default_factory=dict)
+    _zones: dict[str, list[str]] = field(default_factory=dict)
     _reader: VideoReader | None = None
     _collector: Collector | None = None
     # Каталоги открываются один раз на корень: ручная нарезка и автонарезка пишут в одну историю
@@ -121,6 +123,7 @@ class WebSession:
             session.config_path.parent.mkdir(parents=True, exist_ok=True)
             save_config(session.config, session.config_path)
         session._positions = dict(state.positions)
+        session._zones = {key: list(value) for key, value in state.zones.items()}
         if state.playlist_dir and Path(state.playlist_dir).is_dir():
             session.playlist_dir = Path(state.playlist_dir)
         same_config = config_path is None or state.config_path == str(session.config_path)
@@ -141,6 +144,7 @@ class WebSession:
             video=str(self.video) if self.video else None,
             frame=self.frame,
             positions=dict(self._positions),
+            zones=dict(self._zones),
         ))
 
     def remember_frame(self, frame: int) -> None:
@@ -151,8 +155,55 @@ class WebSession:
     # ---- настройки ----------------------------------------------------------------------------------
 
     def effective_config(self) -> CollectorConfig:
-        """ Настройки с учётом открытого видео (папка датасета рядом с видео). """
-        return self.config.for_video(self.video) if self.video else self.config
+        """ Настройки с учётом открытого видео (папка датасета рядом с видео) и выбранных зон. """
+        config = self.config.for_video(self.video) if self.video else self.config.model_copy(deep=True)
+        return self._with_zones(config)
+
+    def _with_zones(self, config: CollectorConfig) -> CollectorConfig:
+        """
+            Подставляет выбор зон для файла разметки: сохранённый для этой камеры,
+            иначе фигуры с метками из настроек, иначе все фигуры.
+        """
+        regions = config.regions
+        if regions.source != RegionSource.FILE or regions.file is None or not regions.file.is_file():
+            return config
+        chosen = self._zones.get(str(regions.file))
+        if chosen is None:
+            chosen = LabelMeRegions(regions.file, regions.labels, regions.where, regions.id_field).ids()
+        regions.labels = []
+        regions.ids = list(chosen)
+        return config
+
+    def zone_shapes(self) -> list[dict[str, Any]]:
+        """ Все фигуры файла разметки в координатах кадра: какие режем, а какие нет. """
+        labelme = self._labelme()
+        if labelme is None or self.video is None:
+            return []
+        first = self._get_reader().read(0)
+        if first is None:
+            return []
+        selected = set(self.effective_config().regions.ids)
+        kinds = labelme.shape_types()
+        return [{"id": r.id, "label": str(r.attrs.get("label", "")), "polygon": [list(p) for p in r.polygon],
+                 "shape": kinds.get(r.id, "polygon"), "selected": r.id in selected}
+                for r in labelme.regions(first.width, first.height)]
+
+    def set_zones(self, ids: list[str]) -> dict[str, Any]:
+        """ Какие зоны резать в этой камере (запоминается за файлом разметки). """
+        with self._lock:
+            labelme = self._labelme()
+            if labelme is None:
+                raise ValueError("Regions are taken from a LabelMe file only")
+            known = set(labelme.ids())
+            unknown = sorted(set(ids) - known)
+            if unknown:
+                raise ValueError(f"Unknown regions: {unknown}")
+            if not ids:
+                raise ValueError("Choose at least one region")
+            self._close_collector()
+            self._zones[str(self.config.regions.file)] = [i for i in ids if i in known]
+            self._save_state()
+        return self.video_info()
 
     def config_yaml(self) -> str:
         """ Настройки текстом YAML. """
@@ -406,6 +457,7 @@ class WebSession:
             first = reader.read(0)
             regions = self.collector().regions_for(first.width, first.height) if first else []
             shapes = self._shape_types()
+            info["shapes"] = self.zone_shapes()
             info.update({
                 "name": reader.path.name,
                 "fps": reader.fps,
@@ -436,7 +488,7 @@ class WebSession:
         regions = self.config.regions
         if regions.source != RegionSource.FILE or regions.file is None or not regions.file.is_file():
             return None
-        return LabelMeRegions(regions.file, regions.labels, regions.where, regions.id_field)
+        return LabelMeRegions(regions.file, (), regions.where, regions.id_field)
 
     def _shape_types(self) -> dict[str, str]:
         labelme = self._labelme()
@@ -495,7 +547,14 @@ class WebSession:
         """ JPEG кадра для показа в браузере; zones — нарисовать зоны (без них — для правки зон). """
         image = frame.image.copy()
         if zones:
-            for region in self.collector().regions_for(frame.width, frame.height):
+            selected = self.collector().regions_for(frame.width, frame.height)
+            chosen = {region.id for region in selected}
+            labelme = self._labelme()
+            # Фигуры, которые не режем, — серым: их можно включить щелчком.
+            for region in labelme.regions(frame.width, frame.height) if labelme is not None else []:
+                if region.id not in chosen:
+                    self._draw_region(image, region, (150, 150, 150))
+            for region in selected:
                 self._draw_region(image, region)
         return self._encode(image, max_width)
 
@@ -584,6 +643,11 @@ class WebSession:
     def _collect_one(self, video: Path, predictor: Any) -> OfflineReport:
         """ Автонарезка одного видео своим сборщиком (общий каталог с ручной нарезкой). """
         config = self.config_for_video(video)
+        try:
+            with VideoReader(video) as reader:
+                self._auto.video_frames = reader.frame_count
+        except OSError:
+            self._auto.video_frames = 0
         catalog = self._acquire_catalog(config.catalog.root)
         try:
             with Collector(config, catalog=catalog) as collector:
@@ -629,13 +693,16 @@ class WebSession:
         return self._encode(image, max_width)
 
     def config_for_video(self, video: Path) -> CollectorConfig:
-        """ Настройки для видео: его папка датасета и его файл зон (рядом с видео или по номеру камеры). """
+        """
+            Настройки для видео: его папка датасета, его файл зон (рядом с видео или по номеру камеры)
+            и выбранные в этой камере зоны.
+        """
         config = self.config.for_video(video)
         found = find_regions_file(video, config.regions.search_dir)
         if found is not None:
             config.regions.file = found[0]
             config.regions.source = RegionSource.FILE
-        return config
+        return self._with_zones(config)
 
     def stop_auto(self) -> None:
         """ Останавливает автонарезку. """
@@ -706,32 +773,83 @@ class WebSession:
                     counts[child.name] = count
         return counts
 
-    def sync(self) -> SyncReport:
-        """ Сверка после ручной проверки. """
-        with self._lock:
-            collector = self.collector()
-            collector.flush()
-            return sync_collection(collector.config, collector.catalog)
+    # ---- итог, сверка, выгрузка ----------------------------------------------------------------------
 
-    def export(self, out_dir: Path, only_new: bool, include_pending: bool) -> ExportReport:
-        """ Выгрузка проверенных кадров. """
-        with self._lock:
-            collector = self.collector()
-            return export_dataset(collector.config, out_dir, only_new=only_new, include_pending=include_pending,
-                                  catalog=collector.catalog)
+    def _scope_videos(self, scope: AutoScope) -> list[Path]:
+        """ Видео для итога: открытое или весь плейлист. """
+        if scope == "playlist":
+            videos = self.playlist_videos()
+            if not videos:
+                raise FileNotFoundError("Playlist is empty: choose a folder with videos")
+            return videos
+        if self.video is None:
+            raise FileNotFoundError("Video is not opened")
+        return [self.video]
 
-    def stats(self) -> dict[str, Any]:
-        """ Счётчики коллекции. """
-        collector = self.collector()
-        stats = collector.stats()
-        return {
-            "collection": collector.config.catalog.collection,
-            "root": str(collector.config.collection_dir),
-            "session": stats.session_by_label,
-            "labels": stats.total_by_label,
-            "statuses": stats.by_status,
-            "rejected": stats.rejected_by_reason,
-        }
+    def _collections(self, scope: AutoScope) -> list[CollectorConfig]:
+        """ Разные датасеты (корень + коллекция) видео из выбранного набора, у которых уже есть история. """
+        seen: dict[tuple[Path, str], CollectorConfig] = {}
+        for video in self._scope_videos(scope):
+            config = self.config_for_video(video)
+            key = (config.catalog.root.resolve(), config.catalog.collection)
+            if key not in seen and (config.catalog.root / CATALOG_FILENAME).exists():
+                seen[key] = config
+        if self._collector is not None:
+            self._collector.flush()
+        return list(seen.values())
+
+    def sync(self, scope: AutoScope = "video") -> SyncReport:
+        """ Сверка после ручной проверки: открытое видео или все видео плейлиста. """
+        total = SyncReport()
+        with self._lock:
+            for config in self._collections(scope):
+                catalog = self._acquire_catalog(config.catalog.root)
+                try:
+                    total.merge(sync_collection(config, catalog))
+                finally:
+                    self._release_catalog(config.catalog.root)
+        return total
+
+    def export(self, out_dir: Path, only_new: bool, include_pending: bool, full_frames: bool = False,
+               scope: AutoScope = "video") -> ExportReport:
+        """ Выгрузка проверенных кадров в одну папку: открытого видео или всех видео плейлиста. """
+        total = ExportReport(out_dir=out_dir)
+        with self._lock:
+            for config in self._collections(scope):
+                catalog = self._acquire_catalog(config.catalog.root)
+                try:
+                    total.merge(export_dataset(config, out_dir, only_new=only_new, include_pending=include_pending,
+                                               full_frames=full_frames, catalog=catalog))
+                finally:
+                    self._release_catalog(config.catalog.root)
+        return total
+
+    def stats(self, scope: AutoScope = "video") -> dict[str, Any]:
+        """ Сколько собрано: по видео (классы и состояния) и итог. """
+        rows: list[dict[str, Any]] = []
+        labels_total: dict[str, int] = {}
+        statuses_total: dict[str, int] = {}
+        for video in self._scope_videos(scope):
+            config = self.config_for_video(video)
+            labels: dict[str, int] = {}
+            statuses: dict[str, int] = {}
+            if (config.catalog.root / CATALOG_FILENAME).exists():
+                catalog = self._acquire_catalog(config.catalog.root)
+                try:
+                    labels = catalog.label_counts(config.catalog.collection, source=video.stem)
+                    statuses = catalog.status_counts(config.catalog.collection, source=video.stem)
+                finally:
+                    self._release_catalog(config.catalog.root)
+            inside = self.playlist_dir is not None and self.playlist_dir in video.parents
+            name = str(video.relative_to(self.playlist_dir)) if inside and self.playlist_dir else video.name
+            rows.append({"video": str(video), "name": name, "labels": labels, "statuses": statuses,
+                         "dataset_dir": str(config.collection_dir)})
+            for key, value in labels.items():
+                labels_total[key] = labels_total.get(key, 0) + value
+            for key, value in statuses.items():
+                statuses_total[key] = statuses_total.get(key, 0) + value
+        return {"scope": scope, "rows": rows, "labels": labels_total, "statuses": statuses_total,
+                "classes": self.config.classes, "unsorted": self.config.unsorted_label}
 
     def catalog_file(self, path: str, video: Path | None = None) -> Path:
         """ Картинка из папки датасета видео (по умолчанию открытого), без выхода за её пределы. """

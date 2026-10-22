@@ -81,6 +81,7 @@ class LabelMeRegions:
         labels: Sequence[str] = (),
         where: Mapping[str, AttrValue] | None = None,
         id_field: str | None = None,
+        ids: Sequence[str] = (),
     ) -> None:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         if not isinstance(data, dict) or "shapes" not in data:
@@ -93,6 +94,9 @@ class LabelMeRegions:
         # Номер фигуры в файле для каждой зоны: нужен, чтобы записать исправленные координаты.
         self._shape_index: dict[str, int] = {}
         self._regions = self._parse(data["shapes"], list(labels), dict(where or {}), id_field, self._shape_index)
+        if ids:
+            wanted = set(ids)
+            self._regions = [region for region in self._regions if region.id in wanted]
         if not self._regions:
             _log.warning("No suitable shapes found in %s (labels=%s, where=%s)", path, list(labels), where)
 
@@ -164,6 +168,10 @@ class LabelMeRegions:
         sx, sy = width / self._image_size[0], height / self._image_size[1]
         return [region.scaled(sx, sy) for region in self._regions]
 
+    def ids(self) -> list[str]:
+        """ Номера зон файла (после отбора по меткам и номерам). """
+        return [region.id for region in self._regions]
+
     def shape_types(self) -> dict[str, str]:
         """ Тип фигуры каждой зоны: 'rectangle' или 'polygon'. """
         shapes = self._data["shapes"]
@@ -227,7 +235,7 @@ def create_region_provider(config: RegionsConfig, api_regions: Sequence[Region] 
             _log.warning("Regions file %s not found, the whole frame will be saved", config.file)
             return FullFrameRegions()
         raise FileNotFoundError(f"Regions file not found: {config.file}")
-    return LabelMeRegions(config.file, config.labels, config.where, config.id_field)
+    return LabelMeRegions(config.file, config.labels, config.where, config.id_field, config.ids)
 
 
 def write_labelme(data: Mapping[str, Any], path: Path) -> None:

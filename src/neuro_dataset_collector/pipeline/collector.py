@@ -229,6 +229,9 @@ class Collector:
                              status=status, proposed_label=decision.proposed)
         sample_id = record.id or 0
         self._submit(MoveJob(source_path, target, on_done=lambda err: self._on_written(sample_id, err)))
+        if self._config.storage.keep_source_frame:
+            self._submit(MoveJob(self._planner.frame_path(source_path), self._planner.frame_path(target),
+                                 missing_ok=True))
         result = SaveResult(SaveStatus.SAVED, message, region_id=record.region_id, label=label,
                             sample_id=record.id, path=target, sample_status=status, trigger="consistency")
         self._notify(result)
@@ -453,9 +456,9 @@ class Collector:
             self._planner.release(name)
             return self._rejected(Rejection(RejectReason.QUEUE_FULL, "Очередь записи переполнена"), candidate,
                                   trigger)
-        if config.storage.keep_source_frame:
-            frame_job = WriteJob(self._planner.frame_path(frame.source, frame.index), frame.image,
-                                 config.storage.image_format, config.storage.jpeg_quality, skip_if_exists=True)
+        if config.storage.keep_source_frame and pending.region is not None:
+            frame_job = WriteJob(self._planner.frame_path(path), frame.image,
+                                 config.storage.image_format, config.storage.jpeg_quality)
             self._submit(frame_job)
         pending.sample_id = sample_id
         if mode == SaveMode.AUTO:
