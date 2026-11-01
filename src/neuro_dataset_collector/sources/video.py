@@ -12,7 +12,7 @@ import numpy as np
 from .._cv import get_cv2
 from ..core.types import Frame
 
-__all__ = ["VideoReader", "list_videos"]
+__all__ = ["VideoReader", "is_annotated_video", "list_videos"]
 
 
 def _windows_short_path(path: Path) -> str | None:
@@ -29,7 +29,7 @@ def _windows_short_path(path: Path) -> str | None:
 
 
 def list_videos(path: Path, extensions: Sequence[str], recursive: bool = False) -> list[Path]:
-    """ Видео по пути: один файл или все подходящие файлы папки (отсортированы по имени). """
+    """ Видео по пути: один файл или все подходящие файлы папки (отсортированы по имени, без «….annotated.*»). """
     path = Path(path)
     if path.is_file():
         return [path]
@@ -37,7 +37,13 @@ def list_videos(path: Path, extensions: Sequence[str], recursive: bool = False) 
         raise FileNotFoundError(f"Video path not found: {path}")
     allowed = {ext.lower() if ext.startswith(".") else f".{ext.lower()}" for ext in extensions}
     pattern = "**/*" if recursive else "*"
-    return sorted(p for p in path.glob(pattern) if p.is_file() and p.suffix.lower() in allowed)
+    return sorted(p for p in path.glob(pattern)
+                  if p.is_file() and p.suffix.lower() in allowed and not is_annotated_video(p))
+
+
+def is_annotated_video(path: Path) -> bool:
+    """ Видео, записанное программой со счётчиками и разметкой («….annotated.mp4»): это не исходник, его не режем. """
+    return Path(path).stem.lower().endswith(".annotated")
 
 
 class VideoReader:
