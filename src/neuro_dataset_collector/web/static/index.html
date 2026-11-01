@@ -120,12 +120,50 @@
     </div>
   </section>
 
-  <!-- ============ История ============ -->
+  <!-- ============ История, журнал, участки ============ -->
   <aside class="card history-panel">
-    <h2>История</h2>
-    <p class="hint">Щелчок — перейти к кадру. «→ КЛАСС» — перенести кадр в другой класс, 🗑 — в корзину.
-      Отказы — только за этот запуск программы.</p>
-    <div id="history"></div>
+    <div class="side-tabs segmented">
+      <button data-side="history" class="active">История</button>
+      <button data-side="journal" title="Журнал ответов модели: все проверенные кадры, без сохранения картинок">Журнал</button>
+      <button data-side="review" title="Участки видео на проверку (из регрессионного прогона)">Участки</button>
+    </div>
+    <section id="side-history" class="side">
+      <p class="hint">Щелчок — перейти к кадру. «→ КЛАСС» — перенести кадр в другой класс, 🗑 — в корзину.
+        Отказы — только за этот запуск программы.</p>
+      <div id="history"></div>
+    </section>
+    <section id="side-journal" class="side" hidden>
+      <div class="row">
+        <select id="journal-select" title="Журнал ответов модели"></select>
+        <button id="journal-open" class="icon" title="Открыть журнал (….predictions.csv)…">📂</button>
+        <button id="journal-refresh" class="icon" title="Перечитать">↻</button>
+      </div>
+      <div id="journal-meta" class="muted small"></div>
+      <div class="filters">
+        <div class="row">
+          <select id="jf-zone" title="Зона"><option value="">все зоны</option></select>
+          <label class="check" title="Только кадры, где класс в зоне сменился по сравнению с прошлым кадром"><input type="checkbox" id="jf-flips"> смены класса</label>
+        </div>
+        <div class="row">уверенность от <input id="jf-min" type="number" step="0.05" min="0" max="1" class="short">
+          до <input id="jf-max" type="number" step="0.05" min="0" max="1" class="short"></div>
+        <div id="jf-labels" class="chips wrap" title="Ответ модели (ничего не выбрано — все)"></div>
+      </div>
+      <div id="journal-count" class="muted small"></div>
+      <div id="journal-grid" class="strip"></div>
+      <button id="journal-more" hidden>Показать ещё</button>
+      <p class="hint">Щелчок по вырезу — кадр целиком в плеере. Клавиша класса — сохранить выделенный вырез
+        в этот класс (Shift — даже если похож на сохранённый), затем выделяется следующий.</p>
+    </section>
+    <section id="side-review" class="side" hidden>
+      <div class="row">
+        <span id="review-name" class="path muted">файл участков не открыт</span>
+        <button id="review-open" class="icon" title="Открыть файл участков (….review.json)…">📂</button>
+      </div>
+      <div id="review-list"></div>
+      <div id="review-grid" class="strip"></div>
+      <p class="hint">Щелчок по участку — кадры зоны на участке; щелчок по вырезу — кадр в плеере, клавиша
+        класса — сохранить вырез. ✓ — участок разобран.</p>
+    </section>
   </aside>
 </main>
 
@@ -324,6 +362,7 @@
     <tr><td>клавиша «без класса»</td><td>сохранить в «_unsorted»</td></tr>
     <tr><td>щелчок по зоне на кадре</td><td>включить / выключить нарезку этой зоны</td></tr>
     <tr><td><kbd>Alt</kbd>+<kbd>M</kbd></td><td>показать / скрыть ответы модели на кадре</td></tr>
+    <tr><td>клавиша класса при выделенном вырезе</td><td>журнал и участки: сохранить вырез в класс и выделить следующий</td></tr>
     <tr><td><kbd>Esc</kbd></td><td>закрыть панель</td></tr>
   </table>
   <div class="row end"><button data-close-dialog>Закрыть</button></div>
@@ -348,6 +387,7 @@
 <script src="/static/js/history.js?v={{version}}"></script>
 <script src="/static/js/auto.js?v={{version}}"></script>
 <script src="/static/js/summary.js?v={{version}}"></script>
+<script src="/static/js/journal.js?v={{version}}"></script>
 <script src="/static/js/main.js?v={{version}}"></script>
 </body>
 </html>

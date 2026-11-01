@@ -23,6 +23,7 @@ from pydantic import BaseModel, ValidationError
 
 from .. import __version__
 from ..config.models import NAME_PATTERN, dataset_dir_for_video
+from ..journal.table import JournalFilter
 from ..regions.providers import ShapeKind
 from . import DEFAULT_PORT
 from .picker import pick_path
@@ -41,6 +42,8 @@ _PICK_EXT = {
     "json": {".json"},
     "yaml": {".yaml", ".yml"},
     "model": {".pt", ".onnx"},
+    "journal": {".csv", ".json"},
+    "review": {".json"},
     "dir": set(),
 }
 
@@ -95,6 +98,26 @@ class AutoRequest(BaseModel):
 
     scope: AutoScope = "video"
     mode: AutoMode = "collect"
+
+
+class JournalQuery(BaseModel):
+    """ Выборка из журнала ответов модели. """
+
+    path: str
+    filter: JournalFilter = JournalFilter()
+    offset: int = 0
+    limit: int = 60
+
+
+class ZoneSaveRequest(BaseModel):
+    """ Сохранение выреза одной зоны кадра (из журнала или участка на проверку). """
+
+    video: str
+    frame: int
+    zone: str
+    label: str | None = None
+    journal: str | None = None
+    force: bool = False
 
 
 class ExportRequest(BaseModel):
@@ -333,6 +356,58 @@ def create_app(session: WebSession) -> FastAPI:
     @app.get("/api/file")
     def catalog_file(path: str = Query(...), video: str | None = Query(None)) -> FileResponse:
         return FileResponse(_call(lambda: session.catalog_file(path, Path(video) if video else None)))
+
+    # ---- журнал ответов модели и участки на проверку ----
+
+    def journals_payload() -> dict[str, Any]:
+        return {"items": session.journals.journals(session.journal_folders())}
+
+    @app.get("/api/resolve-video")
+    def resolve_video(path: str = Query(...)) -> dict[str, str]:
+        return {"path": str(_call(lambda: session.resolve_video(path)))}
+
+    @app.get("/api/journals")
+    def journals() -> dict[str, Any]:
+        result: dict[str, Any] = _call(journals_payload)
+        return result
+
+    @app.post("/api/journals/open")
+    def open_journal(path: str = Body(..., embed=True)) -> dict[str, Any]:
+        base = _call(lambda: session.journals.remember(Path(path)))
+        return {**journals_payload(), "path": str(base)}
+
+    @app.post("/api/journal/query")
+    def journal_query(request: JournalQuery) -> dict[str, Any]:
+        result: dict[str, Any] = _call(lambda: session.journals.query(Path(request.path), request.filter,
+                                                                      max(0, request.offset),
+                                                                      min(500, max(1, request.limit))))
+        return result
+
+    @app.get("/api/journal/crop")
+    def journal_crop(video: str = Query(...), frame: int = Query(..., ge=0), zone: str = Query(...),
+                     journal: str | None = Query(None)) -> Response:
+        image = _call(lambda: session.journal_crop(video, frame, zone, journal))
+        return Response(image, media_type="image/jpeg", headers={"Cache-Control": "max-age=3600"})
+
+    @app.post("/api/journal/save")
+    def journal_save(request: ZoneSaveRequest) -> dict[str, Any]:
+        results = _call(lambda: session.save_zone(request.video, request.frame, request.zone, request.label,
+                                                  request.journal, request.force))
+        return {"results": [session.result_to_dict(r) for r in results]}
+
+    @app.get("/api/review")
+    def review(path: str = Query(...)) -> dict[str, Any]:
+        result: dict[str, Any] = _call(lambda: session.journals.review(Path(path)))
+        return result
+
+    @app.post("/api/review/done")
+    def review_done(path: str = Body(...), index: int = Body(...), done: bool = Body(True)) -> dict[str, Any]:
+        result: dict[str, Any] = _call(lambda: session.journals.set_done(Path(path), index, done))
+        return result
+
+    @app.get("/api/review/items")
+    def review_items(path: str = Query(...), index: int = Query(..., ge=0)) -> dict[str, Any]:
+        return {"items": _call(lambda: session.journals.segment_items(Path(path), index))}
 
     # ---- автонарезка, сверка, выгрузка ----
 

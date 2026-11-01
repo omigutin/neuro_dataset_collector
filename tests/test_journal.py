@@ -57,3 +57,27 @@ def test_annotated_videos_are_skipped(tmp_path: Path) -> None:
         (tmp_path / name).write_bytes(b"")
     assert [p.name for p in list_videos(tmp_path, [".avi", ".mp4"])] == ["cam25_1310.avi"]
     assert is_annotated_video(Path("x.annotated.mp4")) and not is_annotated_video(Path("annotated_cam.mp4"))
+
+
+def test_journal_table_filters_flips_and_answer(tmp_path: Path) -> None:
+    from neuro_dataset_collector.journal import JournalFilter, JournalTable, find_journals
+
+    meta = JournalMeta(video="v.avi", fps=10.0, zones=[JournalZone(id="1", polygon=[(0, 0), (4, 0), (4, 4)])],
+                       classes=["EMPTY", "FULL"])
+    labels = ["EMPTY", "EMPTY", "FULL", "FULL", None, "EMPTY"]
+    with JournalWriter(tmp_path / "runs" / "v", meta) as writer:
+        for frame, label in enumerate(labels):
+            writer.write(frame, frame / 10, "1", label, 0.9 if label else None, "S" if frame > 2 else None)
+            writer.write(frame, frame / 10, "2", "FULL", 0.4)
+    assert find_journals(tmp_path) == [tmp_path / "runs" / "v"]
+    table = JournalTable.load(tmp_path / "runs" / "v.predictions.json")
+    assert len(table) == 12 and table.zones == ["1", "2"]
+    page = table.query(JournalFilter(zones=["1"], flips=True))
+    assert [r.frame for r in page.rows] == [2, 4, 5] and page.labels == {"FULL": 1, "": 1, "EMPTY": 1}
+    assert table.query(JournalFilter(labels=[""])).total == 1
+    assert table.query(JournalFilter(conf_max=0.5)).total == 6
+    assert table.query(JournalFilter(states=["S"], zones=["1"])).total == 3
+    assert table.query(JournalFilter(frame_from=4), offset=1, limit=2).total == 4
+    answer = table.answer(3, "1")
+    assert answer is not None and answer.label == "FULL" and answer.state == "S"
+    assert table.answer(3, "9") is None

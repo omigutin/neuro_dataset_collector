@@ -19,17 +19,23 @@ from .segments import (
     review_path,
     write_review,
 )
+from .table import JournalFilter, JournalPage, JournalTable, find_journals, journal_base
 
 __all__ = [
     "JOURNAL_VERSION",
+    "JournalFilter",
     "JournalMeta",
+    "JournalPage",
     "JournalRow",
+    "JournalTable",
     "JournalWriter",
     "JournalZone",
     "ReviewFile",
     "ReviewKind",
     "ReviewSegment",
     "build_segments",
+    "find_journals",
+    "journal_base",
     "journal_paths",
     "read_journal",
     "read_journal_meta",

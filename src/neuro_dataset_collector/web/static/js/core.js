@@ -16,6 +16,7 @@ const state = {
   auto: null,          // ход автонарезки (ответ /api/auto/status)
   edit: null,          // правка зон: { regions: [{id, shape, points}], active, vertex, drag, history }
   model: false,        // показывать ответы модели на кадре
+  side: "history",     // вкладка справа: история, журнал или участки
 };
 
 async function api(method, url, body) {

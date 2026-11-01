@@ -20,10 +20,10 @@ from ..catalog.catalog import CATALOG_FILENAME, Catalog
 from ..config.loader import dump_config, load_config, resolve_paths, save_config
 from ..config.models import DATASET_DIR_SUFFIX, CollectorConfig, RegionSource, TaskType
 from ..core.results import ExportReport, SaveResult, SyncReport
-from ..core.types import Frame, Point, Region, SampleStatus
+from ..core.types import Frame, Point, Prediction, Region, SampleStatus
 from ..export.roboflow import export_dataset
 from ..pipeline.collector import FULL_FRAME_ID, Collector
-from ..pipeline.model_run import ModelRunReport, ZoneAnswer, run_model
+from ..pipeline.model_run import JOURNAL_DIR, ModelRunReport, ZoneAnswer, run_model
 from ..pipeline.offline import OfflineReport, collect_videos
 from ..regions.providers import (
     LabelMeRegions,
@@ -39,6 +39,7 @@ from ..review.sync import sync_collection
 from ..sources.video import VideoReader, list_videos
 from ..storage.layout import IMAGES_DIR, SUSPECT_DIR
 from .history import RejectionLog, sample_item
+from .journal_view import JournalService
 from .model_view import ModelView
 from .state import SessionState, default_config_path, load_state, save_state
 
@@ -110,6 +111,7 @@ class WebSession:
     _auto_marks: dict[str, tuple[bool, float]] = field(default_factory=dict)
     _auto_answers: list[ZoneAnswer] = field(default_factory=list)
     _model: ModelView = field(default_factory=ModelView)
+    _journals: JournalService = field(default_factory=JournalService)
 
     # ---- запуск и сеанс -----------------------------------------------------------------------------
 
@@ -945,10 +947,88 @@ class WebSession:
             raise FileNotFoundError(path)
         return file
 
+    # ---- журнал ответов модели и участки на проверку -------------------------------------------------
+
+    @property
+    def journals(self) -> JournalService:
+        """ Открытые журналы и участки. """
+        return self._journals
+
+    def resolve_video(self, path: str) -> Path:
+        """
+            Видео из журнала или файла участков. Если по записанному пути видео нет (журнал с другого
+            компьютера), ищется видео с тем же именем в плейлисте.
+        """
+        video = Path(path)
+        if video.is_file():
+            return video.resolve()
+        for candidate in self.playlist_videos():
+            if candidate.name == video.name:
+                return candidate
+        raise FileNotFoundError(f"Video not found: {path}")
+
+    def journal_folders(self) -> list[Path]:
+        """ Где искать журналы: папка плейлиста (с подпапками) и папка журналов общего датасета. """
+        folders = [self.playlist_dir] if self.playlist_dir is not None else []
+        if not self.config.catalog.next_to_video:
+            folders.append(self.config.collection_dir / JOURNAL_DIR)
+        return folders
+
+    def zone_region(self, video: Path, zone: str, journal: Path | None) -> Region | None:
+        """
+            Зона для выреза: контур из журнала, иначе — из файла разметки видео; "full" — весь кадр.
+        """
+        if zone == FULL_FRAME_ID:
+            return None
+        region = self._journals.zone_region(journal, zone)
+        if region is not None:
+            return region
+        frame = self._journals.frame(video, 0)
+        config = self.config_for_video(video)
+        labelme = None
+        if config.regions.source == RegionSource.FILE and config.regions.file is not None:
+            labelme = LabelMeRegions(config.regions.file, (), config.regions.where, config.regions.id_field)
+        for found in labelme.regions(frame.width, frame.height) if labelme is not None else []:
+            if found.id == zone:
+                return found
+        raise ValueError(f"Unknown zone {zone!r} for {video.name}")
+
+    def journal_crop(self, video: str, frame: int, zone: str, journal: str | None) -> bytes:
+        """ Вырез зоны на кадре видео для показа. """
+        path = self.resolve_video(video)
+        base = Path(journal) if journal else None
+        return self._journals.crop(path, frame, self.zone_region(path, zone, base))
+
+    def save_zone(self, video: str, frame: int, zone: str, label: str | None, journal: str | None,
+                  force: bool = False) -> list[SaveResult]:
+        """
+            Сохраняет вырез одной зоны кадра (из журнала или участка): видео открывается, если открыто другое;
+            ответ модели из журнала записывается вместе с кадром.
+        """
+        path = self.resolve_video(video)
+        if self.video != path:
+            self.open_video(path)
+        base = Path(journal) if journal else None
+        region = self.zone_region(path, zone, base)
+        predictions: list[Prediction] = []
+        if base is not None:
+            answer = self._journals.table(base).answer(frame, zone)
+            if answer is not None and answer.frame == frame and answer.label:
+                predictions = [Prediction(answer.label, answer.conf if answer.conf is not None else 0.0)]
+        with self._lock:
+            image = self._get_reader().read(frame)
+            if image is None:
+                raise IndexError(f"Frame {frame} not found")
+            collector = self.collector()
+            results = collector.save(image, label, region=region, predictions=predictions, force=force)
+            collector.flush()
+        return results
+
     def close(self) -> None:
         """ Освобождает ресурсы. """
         self.stop_auto()
         self._model.close()
+        self._journals.close()
         with self._lock:
             self._close_reader()
             self._close_collector()

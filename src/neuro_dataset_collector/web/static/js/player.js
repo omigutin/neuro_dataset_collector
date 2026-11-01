@@ -289,8 +289,11 @@ function onKey(event) {
   if (!state.config || event.ctrlKey || event.altKey || event.metaKey) return;
   const pressed = keyOf(event);
   const label = state.config.manual.keys[pressed];
-  if (label) { event.preventDefault(); saveCurrent(label, event.shiftKey); return; }
-  if (pressed === state.config.manual.save_all_key.toLowerCase()) { event.preventDefault(); saveCurrent(null, event.shiftKey); }
+  if (label) { event.preventDefault(); if (!stripKey(label, event.shiftKey)) saveCurrent(label, event.shiftKey); return; }
+  if (pressed === state.config.manual.save_all_key.toLowerCase()) {
+    event.preventDefault();
+    if (!stripKey(null, event.shiftKey)) saveCurrent(null, event.shiftKey);
+  }
 }
 
 function bindPlayer() {

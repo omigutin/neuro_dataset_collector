@@ -35,11 +35,13 @@ function init() {
   bindHistory();
   bindAuto();
   bindSummary();
+  bindJournal();
   loadConfig()
     .then(() => api("GET", "/api/video"))
     .then((info) => applyVideo(info, info.frame))
     .then(loadPlaylist)
     .then(pollAuto)
+    .then(openFromLink)
     .catch((error) => toast(error.message, "bad"));
 }
 
