@@ -251,6 +251,36 @@ class Collector:
         return self._store(pending, SaveMode.AUTO, "consistency", SampleStatus.SUSPECT, label=label,
                            model_label=label, proposed=proposed, note=f"подозрительный ({reason})")
 
+    def flag(
+        self,
+        frame: Frame,
+        predictions: PredictionsInput = None,
+        *,
+        region: Region | None = None,
+        reason: str = "",
+        trigger: str = "model_check",
+    ) -> list[SaveResult]:
+        """
+            Сохраняет вырез на проверку человеком (в «_suspect», класс — ответ модели): например, где модель
+            не уверена или сменила класс. Дубли и ограничения режима работы проверяются как при автосборе.
+        """
+        with self._lock:
+            results: list[SaveResult] = []
+            for zone, zone_predictions in self._pairs(frame, predictions, region):
+                pending = self._make_pending(frame, zone, zone_predictions)
+                if pending is None:
+                    continue
+                candidate = pending.candidate
+                rejection = self._runtime_rejection(auto=True) or self._dedup.check(candidate)
+                if rejection is not None:
+                    results.append(self._rejected(rejection, candidate, trigger))
+                    continue
+                model = top_prediction(candidate.predictions)
+                results.append(self._store(pending, SaveMode.AUTO, trigger, SampleStatus.SUSPECT,
+                                           label=candidate.label, model_label=model.label if model else None,
+                                           note=f"на проверку ({reason})" if reason else "на проверку"))
+            return results
+
     # ---- ручное сохранение ------------------------------------------------------------------------
 
     def save(

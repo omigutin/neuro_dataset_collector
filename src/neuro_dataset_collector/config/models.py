@@ -24,6 +24,7 @@ __all__ = [
     "DuplicatePolicy",
     "ImageFormat",
     "IntervalLimit",
+    "JournalRunConfig",
     "LabelOverride",
     "Limit",
     "ManualConfig",
@@ -382,6 +383,20 @@ class ModelConfig(_Model):
     conf: float = Field(default=0.05, ge=0.0, le=1.0)
 
 
+class JournalRunConfig(_Model):
+    """
+        Прогон видео моделью с записью журнала ответов. При save=True сохраняются вырезы,
+        где модель «не прошла условия»: уверенность ниже conf_below, класс сменился по сравнению
+        с прошлым проверенным кадром (flips) или ответ — один из labels. Вырезы попадают на проверку
+        в «_suspect» (папка по ответу модели).
+    """
+
+    save: bool = False
+    conf_below: float | None = Field(default=0.6, ge=0.0, le=1.0)
+    flips: bool = True
+    labels: list[str] = Field(default_factory=list)
+
+
 class CollectorConfig(_Model):
     """ Все настройки сборщика кадров. """
 
@@ -398,6 +413,7 @@ class CollectorConfig(_Model):
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     source: SourceConfig = Field(default_factory=SourceConfig)
     model: ModelConfig = Field(default_factory=ModelConfig)
+    journal: JournalRunConfig = Field(default_factory=JournalRunConfig)
 
     @field_validator("classes")
     @classmethod
@@ -417,6 +433,7 @@ class CollectorConfig(_Model):
         if not known:
             return self
         referenced: list[str] = list(self.manual.keys.values()) + list(self.consistency.review_always)
+        referenced.extend(self.journal.labels)
         referenced.extend(name for name in self.auto.per_label if name != self.unsorted_label)
         for source, targets in self.consistency.trusted_flips.items():
             referenced.append(source)
