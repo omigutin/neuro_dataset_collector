@@ -16,7 +16,9 @@ const state = {
   auto: null,          // ход автонарезки (ответ /api/auto/status)
   edit: null,          // правка зон: { regions: [{id, shape, points}], active, vertex, drag, history }
   model: false,        // показывать ответы модели на кадре
-  side: "history",     // вкладка справа: история, журнал или участки
+  showZones: true,     // рисовать зоны на кадре
+  answers: null,       // ответы модели на текущем кадре: { frame, answers: [{zone, label, conf}] }
+  view: "cut",         // режим: нарезка, журнал, участки, проверка, итог
 };
 
 async function api(method, url, body) {
@@ -80,6 +82,49 @@ function bindKeyInput(input) {
     if (KEY_CHARS.includes(key) && key.length === 1) input.value = key;
   });
 }
+
+// ---------------------------------------------------------------- режимы
+
+const VIEWS = ["cut", "journal", "review", "check", "export"];
+const viewHandlers = {};   // режим → что сделать при его открытии
+
+function setView(name) {
+  if (!VIEWS.includes(name)) name = "cut";
+  state.view = name;
+  $$(".rail button").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
+  VIEWS.forEach((v) => ($(`#view-${v}`).hidden = v !== name));
+  if (name !== "cut" && typeof pause === "function") pause();
+  try { localStorage.setItem("ndc.view", name); } catch (error) { /* хранилище браузера недоступно */ }
+  renderHints();
+  if (viewHandlers[name]) viewHandlers[name]();
+}
+
+const HINTS = {
+  cut: [["Пробел", "пуск / пауза"], ["← →", "шаг"], ["клавиша класса", "сохранить"], ["PgUp PgDn", "видео"], ["Alt+M", "ответы модели"]],
+  journal: [["← →", "соседний вырез"], ["клавиша класса", "сохранить и дальше"], ["Enter", "кадр в нарезке"]],
+  review: [["← →", "соседний вырез"], ["клавиша класса", "сохранить и дальше"], ["Enter", "кадр в нарезке"]],
+  check: [], export: [],
+};
+
+function renderHints() {
+  const hints = HINTS[state.view] || [];
+  const folder = state.info && state.info.dataset_dir ? `<span class="spacer"></span><span>Датасет: ${escapeHtml(state.info.dataset_dir)}</span>` : "";
+  $("#hints").innerHTML = hints.map(([k, t]) => `<span><kbd>${escapeHtml(k)}</kbd> ${escapeHtml(t)}</span>`).join("") + folder;
+}
+
+// Цвета классов — те же, что рисует сервер на кадре (там BGR, здесь RGB).
+const CLASS_COLORS = ["#50c850", "#ff783c", "#28a0ff", "#dc50c8", "#dcdc28", "#a05aff", "#ff9696", "#a0c85a"];
+function classColor(label) {
+  if (!label) return "#969696";
+  const classes = (state.config && state.config.classes) || [];
+  const index = classes.includes(label) ? classes.indexOf(label) : [...label].reduce((a, c) => a + c.charCodeAt(0), 0);
+  return CLASS_COLORS[index % CLASS_COLORS.length];
+}
+
+const fmtTime = (seconds) => {
+  const s = Math.max(0, seconds || 0);
+  return `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, "0")}`;
+};
 
 // ---------------------------------------------------------------- боковые панели
 

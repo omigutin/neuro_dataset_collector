@@ -4,16 +4,10 @@
 const summary = { scope: "video" };
 const STATUS_NAMES = { pending: "ждут проверки", verified: "проверены", suspect: "подозрит.", rejected: "удалены" };
 
-function openSummary() {
-  openDrawer("summary-drawer");
-  loadStats();
-  pollCheck();
-}
-
 function setSummaryScope(scope) {
   summary.scope = scope;
-  $$("#summary-drawer .segmented button").forEach((b) => b.classList.toggle("active", b.dataset.scope === scope));
-  loadStats();
+  $$(".scope-switch button").forEach((b) => b.classList.toggle("active", b.dataset.scope === scope));
+  if (state.view === "export") loadStats();
 }
 
 function sep(path) {
@@ -44,18 +38,18 @@ async function loadStats() {
       <td class="name" title="${escapeHtml(row.video)}">${escapeHtml(row.name)}</td>
       ${columns.map((c) => cell(row.labels[c])).join("")}<td><b>${total(row.labels)}</b></td>
       ${statusColumns.map((s) => cell(row.statuses[s])).join("")}
-      <td>${total(row.labels) ? `<button class="icon small" data-folder="${i}" title="Открыть папку кадров">📂</button>` : ""}</td></tr>`).join("");
+      <td>${total(row.labels) ? `<button class="btn small" type="button" data-folder="${i}" title="Открыть папку кадров">Папка</button>` : ""}</td></tr>`).join("");
     const foot = data.rows.length > 1 ? `<tr class="total"><td>Итого</td>${columns.map((c) => cell(data.labels[c])).join("")}
       <td><b>${total(data.labels)}</b></td>${statusColumns.map((s) => cell(data.statuses[s])).join("")}<td></td></tr>` : "";
-    $("#stats").innerHTML = `<div class="table-wrap"><table class="stats">${head}${rows}${foot}</table></div>`;
+    $("#stats").innerHTML = data.rows.length ? `<div class="table-wrap"><table class="stats">${head}${rows}${foot}</table></div>` : `<p class="muted">Нет видео</p>`;
     $$("#stats button[data-folder]").forEach((b) => (b.onclick = () => openFolder(data.rows[Number(b.dataset.folder)].video)));
     $$("#stats tr[data-row] td.name").forEach((td) => (td.onclick = () => {
-      closeDrawers();
+      setView("cut");
       openVideo(data.rows[Number(td.parentElement.dataset.row)].video);
     }));
     if (!$("#export-dir").value) $("#export-dir").value = defaultExportDir(data);
   } catch (error) {
-    $("#stats").textContent = error.message;
+    $("#stats").innerHTML = `<p class="muted">${escapeHtml(error.message === "Video is not opened" ? "Видео не открыто — выберите «Весь плейлист» или откройте видео" : error.message)}</p>`;
   }
 }
 
@@ -98,7 +92,7 @@ async function runExport() {
 const check = { timer: null, data: null, hidden: new Set() };
 
 async function startCheck() {
-  if (!modelSet()) { toast("Модель не задана: ⚙ → Автонарезка → Модель", "bad"); return; }
+  if (!modelSet()) { toast("Модель не выбрана: укажите файл модели в настройках", "bad"); openModelSettings(); return; }
   try {
     check.hidden.clear();
     await api("POST", "api/check/start", { scope: summary.scope, min_conf: Number($("#check-conf").value) || 0 });
@@ -148,15 +142,15 @@ function renderCheck() {
     return checkCard(d, key, `<div>лежит в <b>${escapeHtml(d.label)}</b>, модель: <b style="color:${classColor(d.model_label)}">${escapeHtml(d.model_label || "—")}</b>
       ${d.conf !== null ? Number(d.conf).toFixed(2) : ""}</div>${where(d)}
       <div class="h-actions">${agree}${moveButtons(d, key, d.model_label)}
-        <button data-act="hide" data-key="${key}" title="Кадр верный — убрать из списка">✓</button>
-        <button data-act="delete" data-key="${key}" data-id="${d.id}" class="del" title="В корзину">🗑</button></div>`);
+        <button data-act="hide" data-key="${key}" title="Кадр верный — убрать из списка">Верно</button>
+        <button data-act="delete" data-key="${key}" data-id="${d.id}" class="del" title="В корзину">Удалить</button></div>`);
   }).join("");
   const pairs = duplicates.map(([p, key]) => `<div class="check-pair" data-key="${key}">
       <div class="muted">почти одинаковые (отличие ${p.distance} из 64), классы разные:</div>
       <div class="pair">${p.items.map((item, n) => checkCard({ ...item, video: p.video }, `${key}-${n}`,
         `<div><b>${escapeHtml(item.label)}</b></div>${where(item)}
-        <div class="h-actions">${moveButtons(item, key)}<button data-act="delete" data-key="${key}" data-id="${item.id}" data-video="${escapeHtml(p.video)}" class="del" title="В корзину">🗑</button></div>`)).join("")}
-      </div><button data-act="hide" data-key="${key}">✓ оба верны</button></div>`).join("");
+        <div class="h-actions">${moveButtons(item, key)}<button data-act="delete" data-key="${key}" data-id="${item.id}" data-video="${escapeHtml(p.video)}" class="del" title="В корзину">Удалить</button></div>`)).join("")}
+      </div><button class="btn small" type="button" data-act="hide" data-key="${key}">Оба верны</button></div>`).join("");
   $("#check-results").innerHTML = (cards ? `<h4>Модель не согласна (${disagreements.length})</h4><div class="check-grid">${cards}</div>` : "")
     + (pairs ? `<h4>Похожие кадры в разных классах (${duplicates.length})</h4>${pairs}` : "");
 }
@@ -190,10 +184,12 @@ async function onCheckClick(event) {
 }
 
 function bindSummary() {
+  viewHandlers.export = loadStats;
+  viewHandlers.check = pollCheck;
   $("#check-start").onclick = startCheck;
   $("#check-stop").onclick = stopCheck;
   $("#check-results").addEventListener("click", onCheckClick);
-  $$("#summary-drawer .segmented button").forEach((b) => (b.onclick = () => setSummaryScope(b.dataset.scope)));
+  $$(".scope-switch button").forEach((b) => (b.onclick = () => setSummaryScope(b.dataset.scope)));
   $("#sync").onclick = runSync;
   $("#export").onclick = runExport;
 }

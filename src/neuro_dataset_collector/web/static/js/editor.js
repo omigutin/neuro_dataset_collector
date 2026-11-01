@@ -35,21 +35,19 @@ function cancelEdit() {
   showFrame(state.frame);
 }
 
-// Кнопки поверх кадра: ✏️ — правка, в правке 💾 — сохранить, ✖ — выйти без сохранения, ↶ — отменить.
+// «Править зоны»: в правке кнопка сохраняет, поверх кадра — «Отменить», «Не сохранять», «В файл камеры…».
 function updateFrameTools() {
   const info = state.info, editing = !!state.edit;
-  $("#frame-tools").hidden = !(info && info.video) || autoRunning();
-  if (!info) return;
+  $("#frame-tools").hidden = !editing || !(info && info.video) || autoRunning();
   const toggle = $("#edit-toggle");
-  toggle.textContent = editing ? "💾" : "✏️";
-  toggle.title = editing ? "Сохранить зоны и выйти из правки (Enter)" : "Править зоны";
+  if (!info) { toggle.disabled = true; return; }
+  toggle.textContent = editing ? "Сохранить зоны" : "Править зоны";
+  toggle.title = editing ? "Сохранить зоны рядом с видео и выйти из правки (Enter)"
+    : info.regions_editable ? "Двигать зоны и их точки прямо на кадре" : "Править можно зоны из файла разметки";
   toggle.disabled = !editing && !info.regions_editable;
   toggle.classList.toggle("active", editing);
-  $("#frame-tools").classList.toggle("editing", editing);
-  $("#edit-cancel").hidden = !editing;
-  $("#edit-undo").hidden = !editing;
+  toggle.setAttribute("aria-pressed", String(editing));
   $("#edit-undo").disabled = !editing || !state.edit.history.length;
-  $("#save-regions-as").hidden = editing;
   $("#zones").classList.toggle("disabled", editing);
   $("#save-regions-as").disabled = !(info.regions_source === "file" && info.regions_file);
 }
@@ -112,6 +110,9 @@ function drawEditor() {
   if (!state.edit) return;
   const canvas = $("#editor"), img = $("#frame");
   const ratio = window.devicePixelRatio || 1;
+  // Холст — ровно поверх картинки кадра (картинка по центру рамки).
+  Object.assign(canvas.style, { left: `${img.offsetLeft}px`, top: `${img.offsetTop}px`,
+    width: `${img.clientWidth}px`, height: `${img.clientHeight}px` });
   canvas.width = Math.round(img.clientWidth * ratio);
   canvas.height = Math.round(img.clientHeight * ratio);
   const ctx = canvas.getContext("2d");
@@ -325,7 +326,7 @@ function bindEditor() {
   $("#edit-cancel").onclick = cancelEdit;
   $("#edit-undo").onclick = undo;
   $("#save-regions-as").onclick = saveRegionsAs;
-  $("#save-regions-as-menu").onclick = () => { closeRegionsMenu(); saveRegionsAs(); };
+  $("#save-regions-as-menu").onclick = () => { closeMenus(); saveRegionsAs(); };
 }
 
 function editKey(event) {

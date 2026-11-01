@@ -76,7 +76,7 @@ function updateSettingsView() {
   $("#model-options").classList.toggle("disabled", !model);
   $("#journal-options").classList.toggle("disabled", !field("journal_save").checked);
   field("journal_conf_below").disabled = !field("journal_conf_on").checked;
-  updateModelChip();
+  if (typeof updateStatus === "function" && state.info) updateStatus();
   $("#model-hint").textContent = model
     ? "С моделью кадр сохраняется по её уверенности; класс подставляется из ответа модели."
     : "Без модели автонарезка берёт кадр раз в заданное время, без дублей; класс не известен — кадры попадают в «_unsorted».";

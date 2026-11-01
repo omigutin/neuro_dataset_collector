@@ -1,7 +1,6 @@
 "use strict";
 // Плейлист: видео папки и подпапок, сгруппированные по подпапкам, с числом кадров по классам.
 
-const REGION_ICONS = { video: ["📌", "свой json рядом с видео"], camera: ["📷", "json по номеру камеры"] };
 const COLLAPSED_KEY = "ndc.playlist.collapsed";
 
 function loadCollapsed() {
@@ -64,16 +63,22 @@ function splitName(name) {
   return { group: parts.slice(0, -1).join(" / "), file: parts[parts.length - 1] };
 }
 
+const playlistView = { show: "all" };
+const REGION_TAGS = { video: "своя разметка", camera: "разметка по камере" };
+
 function renderPlaylist() {
   const current = state.info && state.info.video;
   const autoVideo = autoRunning() ? state.auto.video_path : null;
   const filter = $("#playlist-filter").value.trim().toLowerCase();
+  const items = state.playlist.items;
   $("#playlist-dir").textContent = state.playlist.dir || "папка не выбрана";
   $("#playlist-dir").title = state.playlist.dir || "";
-  $("#playlist-dir").classList.toggle("muted", !state.playlist.dir);
+  $("#playlist-count").textContent = items.length ? `· ${items.length}` : "";
   const groups = new Map();
-  state.playlist.items.forEach((item, index) => {
+  items.forEach((item, index) => {
     if (filter && !item.name.toLowerCase().includes(filter)) return;
+    if (playlistView.show === "new" && item.saved) return;
+    if (playlistView.show === "done" && !item.saved) return;
     const { group, file } = splitName(item.name);
     if (!groups.has(group)) groups.set(group, []);
     groups.get(group).push({ item, index, file });
@@ -85,24 +90,33 @@ function renderPlaylist() {
     const collapsed = group && collapsedGroups.has(group) && !hasCurrent && !filter;
     if (group) {
       html.push(`<div class="pl-group" data-group="${escapeHtml(group)}">${collapsed ? "▸" : "▾"} ${escapeHtml(group)}
-        <span class="muted">${entries.length} видео${saved ? ` · ${saved} кадр.` : ""}</span></div>`);
+        <span>· ${entries.length}${saved ? ` · ${saved} кадр.` : ""}</span></div>`);
     }
     if (collapsed) return;
     entries.forEach(({ item, index, file }) => {
-      const icon = REGION_ICONS[item.regions];
-      const labels = Object.entries(item.labels || {}).map(([name, n]) => `<span class="lbl">${escapeHtml(name)} ${n}</span>`).join("");
+      const labels = Object.entries(item.labels || {});
+      const total = labels.reduce((sum, [, n]) => sum + n, 0);
+      const bar = labels.map(([name, n]) => `<span style="width:${(100 * n) / Math.max(1, total)}%;background:${classColor(name === state.config.unsorted_label ? "" : name)}" title="${escapeHtml(name)}: ${n}"></span>`).join("");
+      const tags = [
+        item.journal ? `<span class="tag blue">журнал модели</span>` : "",
+        REGION_TAGS[item.regions] ? `<span class="tag">${REGION_TAGS[item.regions]}</span>` : "",
+        item.rejected ? `<span class="tag red">отказов ${item.rejected}</span>` : "",
+      ].join("");
       const classes = ["pl-item", item.path === current ? "current" : "", item.path === autoVideo ? "auto" : ""].join(" ");
-      html.push(`<div class="${classes}" data-index="${index}" title="${escapeHtml(item.path)}">
-        <span class="name">${escapeHtml(file)}</span>
-        ${icon ? `<span title="${icon[1]}">${icon[0]}</span>` : ""}
-        ${item.saved ? `<button class="folder" data-folder="${index}" title="Открыть папку с кадрами этого видео">📂</button>` : ""}
-        ${labels ? `<div class="labels">${labels}</div>` : ""}</div>`);
+      html.push(`<div class="${classes}" data-index="${index}" title="${escapeHtml(item.path)}" role="button" tabindex="0">
+        <div class="pl-top"><span class="pl-name">${escapeHtml(file)}</span>
+          <span class="pl-count" title="Сохранено кадров">${item.saved || "—"}</span>
+          ${item.saved ? `<button class="pl-folder" type="button" data-folder="${index}" title="Открыть папку с кадрами" aria-label="Открыть папку с кадрами"><svg class="ic"><use href="#i-folder"/></svg></button>` : ""}</div>
+        ${total ? `<div class="bar">${bar}</div>` : ""}
+        ${tags ? `<div class="pl-tags">${tags}</div>` : ""}</div>`);
     });
   });
   $("#playlist").innerHTML = html.join("")
-    || (state.playlist.dir ? `<p class="muted">${filter ? "ничего не найдено" : "видео не найдено"}</p>` : "");
+    || (state.playlist.dir ? `<p class="muted">${filter || playlistView.show !== "all" ? "ничего не найдено" : "видео не найдено"}</p>`
+      : `<p class="muted">Выберите папку с видео — «Папка…»</p>`);
   const active = $("#playlist .pl-item.current");
   if (active) active.scrollIntoView({ block: "nearest" });
+  renderCrumbs();
   renderHistory();
 }
 
@@ -146,4 +160,13 @@ function bindPlaylist() {
   $("#refresh-playlist").onclick = loadPlaylist;
   $("#playlist").addEventListener("click", onPlaylistClick);
   $("#playlist-filter").addEventListener("input", renderPlaylist);
+  $$("#playlist-show button").forEach((b) => (b.onclick = () => {
+    playlistView.show = b.dataset.show;
+    $$("#playlist-show button").forEach((x) => x.classList.toggle("active", x === b));
+    renderPlaylist();
+  }));
+  document.addEventListener("click", (event) => {
+    if (event.target.closest("[data-pick-folder]")) chooseFolder();
+    if (event.target.closest("[data-pick-video]")) chooseVideo();
+  });
 }

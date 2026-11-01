@@ -1,5 +1,5 @@
 "use strict";
-// Запуск страницы: привязка кнопок и загрузка прошлого сеанса.
+// Запуск страницы: привязка кнопок, режимы и загрузка прошлого сеанса.
 
 function bindPickButtons() {
   $$("[data-pick]").forEach((button) => {
@@ -16,13 +16,13 @@ function bindPickButtons() {
 
 function bindDrawers() {
   $("#open-settings").onclick = () => openDrawer("settings-drawer");
-  $("#open-summary").onclick = openSummary;
   $("#open-help").onclick = () => $("#help-dialog").showModal();
   $("#drawer-shade").onclick = closeDrawers;
   $$("[data-close]").forEach((b) => (b.onclick = closeDrawers));
   $$("[data-close-dialog]").forEach((b) => (b.onclick = () => b.closest("dialog").close()));
   $("#picker-choose-dir").onclick = () => finishPick(picker.path);
   $("#picker-cancel").onclick = () => finishPick(null);
+  $$(".rail button").forEach((b) => (b.onclick = () => setView(b.dataset.view)));
 }
 
 function init() {
@@ -31,15 +31,20 @@ function init() {
   bindSettings();
   bindPlaylist();
   bindPlayer();
+  bindTimeline();
   bindEditor();
   bindHistory();
   bindAuto();
   bindSummary();
   bindJournal();
+  let view = "cut";
+  try { view = localStorage.getItem("ndc.view") || "cut"; } catch (error) { /* хранилище браузера недоступно */ }
+  setView(view === "review" ? "cut" : view);
   loadConfig()
     .then(() => api("GET", "api/video"))
     .then((info) => applyVideo(info, info.frame))
     .then(loadPlaylist)
+    .then(() => loadJournals())
     .then(pollAuto)
     .then(openFromLink)
     .catch((error) => toast(error.message, "bad"));

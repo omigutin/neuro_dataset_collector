@@ -101,10 +101,11 @@ function historyItem(group, item, index, currentFrame) {
     <div class="h-thumbs"><a href="${url}" target="_blank"><img src="${url}" loading="lazy" alt=""></a></div>
     <div><div class="h-title">${escapeHtml(item.label || (group.task === "classify" ? "без класса" : "кадр"))}${status}</div>
       <div class="muted">${where}</div>${model}
-      <div class="h-actions">${moves}<button data-act="delete" class="del" title="В корзину">🗑</button></div></div></div>`;
+      <div class="h-actions">${moves}<button data-act="delete" class="del" title="В корзину">Удалить</button></div></div></div>`;
 }
 
 async function goToFrame(video, frame) {
+  if (state.view !== "cut") setView("cut");
   if (!state.info || state.info.video !== video) await openVideo(video);
   if (!state.info || state.info.video !== video) return;
   pause();
@@ -118,7 +119,7 @@ async function onHistoryClick(event) {
   const video = itemEl.closest("details").dataset.video;
   const item = historyStore.groups.get(video).items[Number(itemEl.dataset.index)];
   const button = event.target.closest("button[data-act]");
-  if (!button) { goToFrame(video, item.frame); return; }
+  if (!button) { closeDrawers(); goToFrame(video, item.frame); return; }
   try {
     if (button.dataset.act === "relabel") {
       await api("POST", `api/sample/${item.id}/relabel`, { video, label: button.dataset.label });
@@ -139,6 +140,27 @@ async function onHistoryClick(event) {
   }
 }
 
+// Последние сохранения открытого видео — под кнопками классов.
+async function loadRecent() {
+  if (!hasVideo()) { $("#recent").innerHTML = ""; return; }
+  const video = state.info.video;
+  try {
+    const data = await api("GET", `api/history?${new URLSearchParams({ video, offset: 0, limit: 8 })}`);
+    const items = data.items.filter((i) => i.kind === "saved").slice(0, 8);
+    $("#recent").innerHTML = items.map((item) => `<button type="button" data-frame="${item.frame}" style="--c:${classColor(item.label)}"
+        title="Кадр ${item.frame}, зона ${escapeHtml(item.region || "—")}"><img src="${fileUrl(item.path, video)}" loading="lazy" alt="">
+        <span>${escapeHtml(item.label || "без класса")} · к.${item.frame}</span></button>`).join("")
+      || `<p class="muted small" style="grid-column:1/-1">В этом видео пока ничего не сохранено</p>`;
+  } catch (error) {
+    $("#recent").innerHTML = "";
+  }
+}
+
 function bindHistory() {
   $("#history").addEventListener("click", onHistoryClick);
+  $("#open-history").onclick = () => { openDrawer("history-drawer"); renderHistory(); };
+  $("#recent").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-frame]");
+    if (button) { pause(); showFrame(Number(button.dataset.frame)); }
+  });
 }

@@ -1,34 +1,64 @@
 "use strict";
-// Кадр: открытое видео, воспроизведение, выбор зон, кнопки классов и ручное сохранение.
+// Нарезка: открытое видео, состояние разметки и модели, кадр, зоны, кнопки классов и ручное сохранение.
 
 const step = () => (state.config ? state.config.source.step : 1);
 const modelSet = () => !!(state.config && state.config.model.path);
 const modelOn = () => state.model && modelSet();
+const hasVideo = () => !!(state.info && state.info.video);
 
-// Цвета классов — те же, что рисует сервер на кадре (там BGR, здесь RGB).
-const CLASS_COLORS = ["#50c850", "#ff783c", "#28a0ff", "#dc50c8", "#dcdc28", "#a05aff", "#ff9696", "#a0c85a"];
-function classColor(label) {
-  if (!label) return "#969696";
-  const classes = (state.config && state.config.classes) || [];
-  const index = classes.includes(label) ? classes.indexOf(label) : [...label].reduce((a, c) => a + c.charCodeAt(0), 0);
-  return CLASS_COLORS[index % CLASS_COLORS.length];
+// ---------------------------------------------------------------- состояние в верхней строке
+
+function updateStatus() {
+  const info = state.info || {};
+  const chip = $("#regions-chip");
+  const useFile = info.regions_source === "file" && info.regions_file;
+  const origin = { video: "рядом с видео", camera: "по номеру камеры" }[info.regions_origin] || "выбрана вручную";
+  chip.querySelector(".txt").textContent = useFile ? `Разметка: ${fileName(info.regions_file)} · ${origin}` : "Разметка: весь кадр, без зон";
+  chip.title = useFile ? info.regions_file : "Зоны не заданы — сохраняется кадр целиком. Щелчок — выбрать файл разметки";
+  chip.classList.toggle("ok", !!useFile && !info.regions_warning);
+  chip.classList.toggle("warn", !!info.regions_warning);
+  $("#save-regions-as-menu").disabled = !useFile;
+  const warning = $("#regions-warning");
+  warning.hidden = !info.regions_warning;
+  if (info.regions_warning) {
+    warning.innerHTML = `<b>Разметка:</b> ${escapeHtml(info.regions_warning)}
+      <button class="btn small" type="button" data-pick-regions>Выбрать файл разметки…</button>`;
+  }
+  const model = $("#model-chip");
+  const name = modelSet() ? fileName(state.config.model.path) : null;
+  model.querySelector(".txt").textContent = name ? `Модель: ${name}${modelOn() ? " · на кадре" : ""}` : "Модель: не выбрана";
+  model.title = name ? "Показывать ответы модели на кадре (Alt+M)" : "Модель не выбрана — щелчок откроет настройки";
+  model.classList.toggle("ok", !!name);
+  model.classList.toggle("on", modelOn());
+  const show = $("#show-model");
+  show.classList.toggle("active", modelOn());
+  show.setAttribute("aria-pressed", String(modelOn()));
+  show.title = name ? "Ответы модели на кадре (Alt+M)" : "Модель не выбрана: Настройки → Автонарезка → Модель";
+  $("#show-zones").classList.toggle("active", state.showZones);
+  $("#show-zones").setAttribute("aria-pressed", String(state.showZones));
 }
 
-// Ответы модели на кадре: включаются кнопкой «🧠 Модель» (или Alt+M), выбор запоминается в браузере.
-function updateModelChip() {
-  const chip = $("#model-chip");
-  if (!chip) return;
-  chip.disabled = !modelSet() || !(state.info && state.info.video);
-  chip.classList.toggle("on", modelOn());
-  chip.title = modelSet() ? "Показывать ответы модели на кадре (Alt+M)" : "Модель не задана: ⚙ → Автонарезка → Модель";
-  if (!modelOn()) $("#model-answers").hidden = true;
+function openModelSettings() {
+  openDrawer("settings-drawer");
+  const input = field("model_path");
+  input.closest("details").open = true;
+  input.scrollIntoView({ block: "center" });
+  input.focus();
 }
 
 function toggleModel() {
-  if (!modelSet()) { toast("Модель не задана: ⚙ → Автонарезка → Модель", "bad"); return; }
+  if (!modelSet()) { toast("Модель не выбрана: укажите файл модели в настройках", "bad"); openModelSettings(); return; }
   state.model = !state.model;
   try { localStorage.setItem("ndc.model", state.model ? "1" : "0"); } catch (error) { /* хранилище браузера недоступно */ }
-  updateModelChip();
+  state.answers = null;
+  updateStatus();
+  renderZones();
+  showFrame(state.frame);
+}
+
+function toggleZones() {
+  state.showZones = !state.showZones;
+  updateStatus();
   showFrame(state.frame);
 }
 
@@ -37,25 +67,23 @@ async function loadAnswers(index) {
   try {
     const data = await api("GET", `api/model/answers/${index}`);
     if (data.frame !== state.frame) return;
-    $("#model-answers").innerHTML = `<span class="muted">Модель:</span>` + data.answers.map((a) =>
-      `<span class="answer"><span class="swatch" style="background:${classColor(a.label)}"></span>${escapeHtml(a.zone)}: <b>${escapeHtml(a.label || "—")}</b>
-        ${a.conf !== null ? `<span class="muted">${a.conf.toFixed(2)}</span>` : ""}</span>`).join("");
-    $("#model-answers").hidden = false;
+    state.answers = data;
   } catch (error) {
-    $("#model-answers").innerHTML = `<span class="bad">${escapeHtml(error.message)}</span>`;
-    $("#model-answers").hidden = false;
+    state.answers = { frame: index, error: error.message, answers: [] };
   }
+  renderZones();
 }
+
+// ---------------------------------------------------------------- видео
 
 async function chooseRegions() {
   stopEdit();
-  closeRegionsMenu();
+  closeMenus();
   const start = (state.info && state.info.regions_file) || (state.config && state.config.regions.search_dir) || (state.info && state.info.video);
   const path = await pickPath("file", "json", start, "Выберите файл разметки (LabelMe json)");
   if (!path) return;
   try {
     await applyVideo(await api("POST", "api/video/regions", { path }), state.frame);
-    await loadConfig();
   } catch (error) {
     toast(error.message, "bad");
   }
@@ -63,10 +91,9 @@ async function chooseRegions() {
 
 async function noRegions() {
   stopEdit();
-  closeRegionsMenu();
+  closeMenus();
   try {
     await applyVideo(await api("POST", "api/video/regions", { path: null }), state.frame);
-    await loadConfig();
   } catch (error) {
     toast(error.message, "bad");
   }
@@ -80,56 +107,88 @@ async function refreshVideo() {
   }
 }
 
-// Название видео: подпапка плейлиста и имя файла.
-function videoTitle(info) {
+// Путь видео в плейлисте: подпапки и имя файла.
+function videoParts(info) {
   const item = state.playlist.items.find((it) => it.path === info.video);
-  return item ? item.name.split(/[\\/]/).join(" › ") : info.name;
+  const parts = item ? item.name.split(/[\\/]/) : [info.name];
+  const root = state.playlist.dir ? fileName(state.playlist.dir.replace(/[\\/]+$/, "")) : null;
+  return (root ? [root] : []).concat(parts);
+}
+
+function renderCrumbs() {
+  const info = state.info;
+  if (!info || !info.video) { $("#crumbs").innerHTML = `<span>${state.playlist.dir ? escapeHtml(state.playlist.dir) : "видео не открыто"}</span>`; return; }
+  const parts = videoParts(info);
+  $("#crumbs").innerHTML = parts.map((p, i) => (i === parts.length - 1 ? `<b>${escapeHtml(p)}</b>` : `<span>${escapeHtml(p)}</span><span class="sep">/</span>`)).join("");
+  $("#crumbs").title = info.video;
 }
 
 async function applyVideo(info, frame) {
   state.info = info;
+  state.answers = null;
   // Сервер сам меняет файл разметки (при открытии видео, после правки зон): иначе следующее сохранение
   // настроек вернуло бы старый файл.
   const regions = state.config && state.config.regions;
   if (regions && ((regions.file || null) !== (info.regions_file || null) || regions.source !== info.regions_source)) {
     await loadConfig();
   }
-  const hasVideo = !!info.video;
-  $("#video-title").textContent = hasVideo ? videoTitle(info) : "Выберите папку с видео 📁 или одно видео 🎞";
+  const has = hasVideo();
+  renderCrumbs();
+  updateStatus();
+  $("#video-title").textContent = has ? info.name : "Видео не открыто";
   $("#video-title").title = info.video || "";
-  $("#video-title").classList.toggle("muted", !hasVideo);
-  const useRegions = info.regions_source === "file" && info.regions_file;
-  const origin = { video: "📌 ", camera: "📷 " }[info.regions_origin] || "";
-  $("#regions-chip").textContent = `Зоны: ${useRegions ? origin + fileName(info.regions_file) : "весь кадр"} ▾`;
-  $("#regions-chip").title = useRegions ? info.regions_file : "Сохраняется кадр целиком";
-  $("#save-regions-as-menu").disabled = !useRegions;
-  $("#dataset-chip").title = `Открыть папку датасета: ${info.dataset_dir || ""}`;
-  $("#dataset-chip").disabled = !hasVideo;
-  updateModelChip();
+  $("#dataset-chip").disabled = !has;
+  $("#dataset-path").textContent = has ? info.dataset_dir : "";
   updateFrameTools();
-  $("#frame-placeholder").style.display = hasVideo ? "none" : "";
-  $("#frame").style.display = hasVideo && !autoRunning() ? "" : "none";
-  if (!hasVideo) { $("#video-info").textContent = ""; $("#zones").innerHTML = ""; return; }
-  $("#video-info").textContent = `${info.width}×${info.height}, ${Number(info.fps).toFixed(1)} к/с, кадров: ${info.frames}`;
+  $("#frame-placeholder").hidden = has;
+  $(".view-cut .frame-wrap").hidden = !has;
+  $(".view-cut .controls").hidden = !has;
+  $("#timeline").hidden = !has;
+  $("#show-zones").disabled = !has;
+  $("#show-model").disabled = !has;
+  renderHints();
+  if (!has) { $("#video-info").textContent = ""; renderZones(); return; }
+  const duration = info.fps ? info.frames / info.fps : 0;
+  $("#video-info").textContent = `${info.width}×${info.height} · ${Number(info.fps).toFixed(1)} к/с · ${fmtTime(duration)} · кадров: ${info.frames}`;
   $("#seek").max = Math.max(0, info.frames - 1);
   renderZones();
   showFrame(frame ?? info.frame ?? 0);
   loadCounts();
-  renderHistory();
+  loadRecent();
+  loadTimeline();
 }
 
-// Зоны файла разметки: какие резать (галочки или щелчок по зоне на кадре).
+// ---------------------------------------------------------------- зоны
+
+function answerFor(zone) {
+  const data = state.answers;
+  if (!modelOn() || !data || data.frame !== state.frame) return null;
+  return data.answers.find((a) => a.zone === zone) || null;
+}
+
+function answerChip(answer) {
+  if (!modelOn()) return "";
+  if (!answer) return `<span class="answer none">…</span>`;
+  const conf = answer.conf !== null && answer.conf !== undefined ? ` ${Number(answer.conf).toFixed(2)}` : "";
+  return `<span class="answer" style="background:${classColor(answer.label)}">${escapeHtml(answer.label || "—")}${conf}</span>`;
+}
+
 function renderZones() {
-  const shapes = (state.info && state.info.shapes) || [];
+  const box = $("#zones");
+  if (!hasVideo()) { box.innerHTML = `<p class="muted small">Откройте видео</p>`; return; }
+  const shapes = state.info.shapes || [];
+  const error = state.answers && state.answers.error ? `<p class="bad small">${escapeHtml(state.answers.error)}</p>` : "";
   if (!shapes.length) {
-    $("#zones").innerHTML = `<span class="muted">Зон нет — сохраняется весь кадр</span>`;
+    const full = answerFor("full");
+    box.innerHTML = `<div class="zone-row"><span class="zname">Весь кадр<br><span class="muted small">зоны не заданы</span></span>${answerChip(full)}</div>
+      <button class="btn small" type="button" data-pick-regions>Выбрать файл разметки…</button>${error}`;
     return;
   }
-  $("#zones").innerHTML = `<span>Резать зоны:</span>` + shapes.map((s) =>
-    `<label class="zone-chip ${s.selected ? "on" : ""}" title="${escapeHtml(s.label)}">
-      <input type="checkbox" data-zone="${escapeHtml(s.id)}" ${s.selected ? "checked" : ""}> ${escapeHtml(s.id)}
-      ${s.label && s.label !== s.id ? `<span class="muted">${escapeHtml(s.label)}</span>` : ""}</label>`).join("")
-    + `<span class="hint">щелчок по зоне на кадре тоже включает и выключает её</span>`;
+  box.innerHTML = shapes.map((s) => `<label class="zone-row ${s.selected ? "" : "off"}" title="${escapeHtml(s.label)}">
+      <input type="checkbox" data-zone="${escapeHtml(s.id)}" ${s.selected ? "checked" : ""}>
+      <span class="zname"><b>Зона ${escapeHtml(s.id)}</b> ${s.label && s.label !== s.id ? `<span class="muted">${escapeHtml(s.label)}</span>` : ""}</span>
+      ${s.selected ? answerChip(answerFor(s.id)) : `<span class="muted small">не режем</span>`}</label>`).join("") + error
+    + `<p class="hint">Галочка или щелчок по зоне на кадре — резать её или нет. Запоминается для камеры.</p>`;
 }
 
 async function setZones(ids) {
@@ -154,17 +213,21 @@ function onFrameClick(event) {
   if (state.edit || autoRunning() || !state.info || !state.info.shapes) return;
   const img = $("#frame");
   const rect = img.getBoundingClientRect();
-  const k = img.clientWidth / (state.info.width || 1);
-  const x = (event.clientX - rect.left) / k, y = (event.clientY - rect.top) / k;
+  // Кадр вписан в рамку с сохранением пропорций: учитываем поля.
+  const k = Math.min(rect.width / (state.info.width || 1), rect.height / (state.info.height || 1));
+  const dx = (rect.width - state.info.width * k) / 2, dy = (rect.height - state.info.height * k) / 2;
+  const x = (event.clientX - rect.left - dx) / k, y = (event.clientY - rect.top - dy) / k;
   const shape = state.info.shapes.find((s) => inside(s.polygon, x, y));
   if (!shape) return;
   const ids = state.info.shapes.filter((s) => (s.id === shape.id ? !s.selected : s.selected)).map((s) => s.id);
   setZones(ids);
 }
 
+// ---------------------------------------------------------------- классы
+
 // Сколько кадров открытого видео уже сохранено по классам.
 async function loadCounts() {
-  if (!state.info || !state.info.video) { state.counts = {}; renderLegend(); return; }
+  if (!hasVideo()) { state.counts = {}; renderLegend(); return; }
   try {
     const data = await api("GET", "api/stats?scope=video");
     state.counts = data.labels || {};
@@ -180,32 +243,45 @@ async function loadCounts() {
   renderLegend();
 }
 
-function renderLegend() {
-  if (!state.config) return;
+// Кнопки классов с клавишами: в нарезке (с числом сохранённых), в журнале и на участках.
+function classButtons(withCounts) {
+  if (!state.config) return "";
   const counts = state.counts || {};
   const keyOfClass = {};
   Object.entries(state.config.manual.keys).forEach(([key, cls]) => (keyOfClass[cls] = key));
-  const buttons = state.config.classes.map((cls) => {
-    const key = keyOfClass[cls];
-    return `<button data-label="${escapeHtml(cls)}" ${key ? "" : 'title="Клавиша не назначена"'}>
-      ${key ? `<kbd>${escapeHtml(key)}</kbd>` : ""}${escapeHtml(cls)}<span class="count">${counts[cls] || 0}</span></button>`;
-  });
-  const unsorted = state.config.task === "classify" ? "без класса" : "сохранить";
-  buttons.push(`<button data-label=""><kbd>${escapeHtml(state.config.manual.save_all_key)}</kbd>${unsorted}<span class="count">${counts[""] || 0}</span></button>`);
-  $("#legend").innerHTML = buttons.join("");
-  $$("#legend button").forEach((b) => (b.onclick = () => saveCurrent(b.dataset.label || null, false)));
+  const button = (label, name, key, color) => `<button type="button" class="cls" data-label="${escapeHtml(label)}" style="--c:${color}" ${key ? "" : 'title="Клавиша не назначена"'}>
+      ${key ? `<kbd>${escapeHtml(key)}</kbd>` : ""}<span class="cname">${escapeHtml(name)}</span>${withCounts ? `<span class="count">${counts[label] || 0}</span>` : ""}</button>`;
+  const html = state.config.classes.map((cls) => button(cls, cls, keyOfClass[cls], classColor(cls)));
+  html.push(button("", state.config.task === "classify" ? "Без класса" : "Сохранить", state.config.manual.save_all_key, "#969696"));
+  return html.join("");
 }
 
+function renderLegend() {
+  if (!state.config) return;
+  $("#legend").innerHTML = state.config.classes.length || state.config.task !== "classify"
+    ? classButtons(true)
+    : `<p class="muted small">Классов нет — добавьте их кнопкой «Классы и клавиши».</p>` + classButtons(true);
+  if (typeof renderStripClasses === "function") renderStripClasses();
+}
+
+// ---------------------------------------------------------------- кадр и воспроизведение
+
 function showFrame(index) {
-  if (!state.info || !state.info.video) return;
+  if (!hasVideo()) return;
   const last = Math.max(0, state.info.frames - 1);
   index = Math.min(Math.max(0, index), last || index);
   state.frame = index;
   state.loading = true;
   $("#seek").value = index;
   $("#frame-number").value = index;
+  const fps = state.info.fps || 25;
+  $("#time").textContent = `${fmtTime(index / fps)} / ${fmtTime(state.info.frames / fps)}`;
+  $("#frame-badge").hidden = false;
+  $("#frame-badge").textContent = `Кадр ${index} · ${fmtTime(index / fps)}`;
   const model = modelOn() && !state.edit ? 1 : 0;
-  $("#frame").src = `api/video/frame/${index}?zones=${state.edit ? 0 : 1}&model=${model}&t=${Date.now()}`;
+  const zones = state.edit || !state.showZones ? 0 : 1;
+  $("#frame").src = `api/video/frame/${index}?zones=${zones}&model=${model}&t=${Date.now()}`;
+  moveTimelineCursor();
   rememberPosition();
 }
 
@@ -217,6 +293,7 @@ function rememberPosition() {
 
 function onFrameLoaded() {
   state.loading = false;
+  if (state.edit) drawEditor();
   if (modelOn() && !state.edit) loadAnswers(state.frame);
   if (!state.playing) return;
   const fps = state.info.fps || 25;
@@ -228,54 +305,64 @@ function onFrameError() {
   state.loading = false;
   if (state.playing) { pause(); toast("Конец видео"); return; }
   // Модель не загрузилась — показать кадр без неё и причину.
-  if (modelOn()) { state.model = false; updateModelChip(); showFrame(state.frame); loadAnswersError(); }
+  if (modelOn()) { state.model = false; updateStatus(); showFrame(state.frame); loadAnswersError(); }
 }
 
-// Причина, почему кадр с ответами модели не показался (например, не установлен ultralytics).
 async function loadAnswersError() {
-  try { await api("GET", `api/model/answers/${state.frame}`); } catch (error) { toast(error.message, "bad"); }
+  try { await api("GET", `api/model/answers/${state.frame}`); } catch (error) { toast(`Модель: ${error.message}`, "bad"); }
 }
 
 function play() {
-  if (!state.info || !state.info.video) return;
+  if (!hasVideo()) return;
   if ($("#step-mode").checked) { showFrame(state.frame + step()); return; }
   state.playing = true;
-  $("#play").textContent = "⏸";
+  $("#play").textContent = "❚❚";
   if (!state.loading) showFrame(state.frame + step());
 }
 
 function pause() {
   state.playing = false;
-  $("#play").textContent = "▶";
+  if ($("#play")) $("#play").textContent = "▶";
 }
 
 async function saveCurrent(label, force, onlyRegions) {
-  if (!state.info || !state.info.video) { toast("Сначала выберите видео", "bad"); return; }
+  if (!hasVideo()) { toast("Сначала откройте видео", "bad"); return; }
   if (autoRunning()) { toast("Идёт автонарезка — дождитесь окончания или остановите её", "bad"); return; }
   try {
     const data = await api("POST", "api/save", { frame: state.frame, label, regions: onlyRegions || null, force, model: modelOn() });
     data.results.forEach((r) => toast(r.message, r.ok ? "ok" : "bad"));
+    const button = $(`#legend .cls[data-label="${CSS.escape(label || "")}"]`);
+    if (button && data.results.some((r) => r.ok)) { button.classList.add("flash"); setTimeout(() => button.classList.remove("flash"), 500); }
     loadCounts().then(renderPlaylist);
     loadGroup(state.info.video);
+    loadRecent();
+    loadTimeline();
     if ($("#step-mode").checked) showFrame(state.frame + step());
   } catch (error) {
     toast(error.message, "bad");
   }
 }
 
-function toggleRegionsMenu() {
-  $("#regions-menu").hidden = !$("#regions-menu").hidden;
+// ---------------------------------------------------------------- меню и клавиши
+
+function closeMenus() {
+  $$(".menu-list").forEach((m) => (m.hidden = true));
 }
 
-function closeRegionsMenu() {
-  $("#regions-menu").hidden = true;
+function toggleMenu(id) {
+  const menu = $(id);
+  const open = menu.hidden;
+  closeMenus();
+  menu.hidden = !open;
 }
 
 function onKey(event) {
   if ($("#picker").open || $("#classes-dialog").open || $("#help-dialog").open) return;
-  if (event.key === "Escape" && drawerOpen()) { closeDrawers(); return; }
+  if (event.key === "Escape") { closeMenus(); if (drawerOpen()) { closeDrawers(); return; } }
   if (drawerOpen()) return;
   if (["INPUT", "SELECT", "TEXTAREA"].includes(event.target.tagName) && !["range", "checkbox"].includes(event.target.type)) return;
+  if (state.view === "journal" || state.view === "review") { stripKeyEvent(event); return; }
+  if (state.view !== "cut") return;
   const key = event.key;
   const big = event.shiftKey ? 10 : 1;
   if (state.edit) { editKey(event); return; }
@@ -286,25 +373,39 @@ function onKey(event) {
   if (key === " ") { event.preventDefault(); state.playing ? pause() : play(); return; }
   if (key === "ArrowRight") { event.preventDefault(); pause(); showFrame(state.frame + step() * big); return; }
   if (key === "ArrowLeft") { event.preventDefault(); pause(); showFrame(state.frame - step() * big); return; }
-  if (!state.config || event.ctrlKey || event.altKey || event.metaKey) return;
+  const label = classOfKey(event);
+  if (label === undefined) return;
+  event.preventDefault();
+  saveCurrent(label, event.shiftKey);
+}
+
+// Класс по нажатой клавише: имя, null — «без класса», undefined — клавиша не назначена.
+function classOfKey(event) {
+  if (!state.config || event.ctrlKey || event.altKey || event.metaKey) return undefined;
   const pressed = keyOf(event);
   const label = state.config.manual.keys[pressed];
-  if (label) { event.preventDefault(); if (!stripKey(label, event.shiftKey)) saveCurrent(label, event.shiftKey); return; }
-  if (pressed === state.config.manual.save_all_key.toLowerCase()) {
-    event.preventDefault();
-    if (!stripKey(null, event.shiftKey)) saveCurrent(null, event.shiftKey);
-  }
+  if (label) return label;
+  if (pressed === state.config.manual.save_all_key.toLowerCase()) return null;
+  return undefined;
 }
 
 function bindPlayer() {
   $("#pick-regions").onclick = chooseRegions;
   $("#no-regions").onclick = noRegions;
-  $("#regions-chip").onclick = (event) => { event.stopPropagation(); toggleRegionsMenu(); };
-  document.addEventListener("click", (event) => { if (!event.target.closest(".menu")) closeRegionsMenu(); });
-  $("#dataset-chip").onclick = () => state.info && state.info.video && openFolder(state.info.video);
+  $("#regions-chip").onclick = (event) => { event.stopPropagation(); toggleMenu("#regions-menu"); };
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest(".menu")) closeMenus();
+    if (event.target.closest("[data-pick-regions]")) chooseRegions();
+  });
   $("#model-chip").onclick = toggleModel;
-  try { state.model = localStorage.getItem("ndc.model") === "1"; } catch (error) { state.model = false; }
+  $("#show-model").onclick = toggleModel;
+  $("#show-zones").onclick = toggleZones;
+  $("#dataset-chip").onclick = () => hasVideo() && openFolder(state.info.video);
   $("#zones").addEventListener("change", onZoneToggle);
+  $("#legend").addEventListener("click", (event) => {
+    const button = event.target.closest(".cls");
+    if (button) saveCurrent(button.dataset.label || null, event.shiftKey);
+  });
   $("#frame").addEventListener("click", onFrameClick);
   $("#frame").addEventListener("load", onFrameLoaded);
   $("#frame").addEventListener("error", onFrameError);
@@ -314,4 +415,5 @@ function bindPlayer() {
   $("#seek").addEventListener("input", (e) => { pause(); showFrame(Number(e.target.value)); });
   $("#frame-number").addEventListener("change", (e) => { pause(); showFrame(Number(e.target.value)); });
   document.addEventListener("keydown", onKey);
+  try { state.model = localStorage.getItem("ndc.model") === "1"; } catch (error) { state.model = false; }
 }
