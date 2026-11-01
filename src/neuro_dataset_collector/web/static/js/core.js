@@ -47,7 +47,7 @@ function toast(text, kind = "") {
 
 const escapeHtml = (text) => String(text).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const fileName = (path) => String(path || "").split(/[\\/]/).pop();
-const fileUrl = (path, video) => `/api/file?path=${encodeURIComponent(path)}&video=${encodeURIComponent(video)}`;
+const fileUrl = (path, video) => `api/file?path=${encodeURIComponent(path)}&video=${encodeURIComponent(video)}`;
 const autoRunning = () => !!(state.auto && state.auto.running);
 
 // Имя класса: заглавная латиница, цифры, «_» и «-»; первый символ — буква или цифра.
@@ -102,7 +102,7 @@ const drawerOpen = () => $$(".drawer").some((d) => !d.hidden);
 async function pickPath(kind, filter, initial, title) {
   let data;
   try {
-    data = await api("POST", "/api/pick", { kind, filter: filter || "any", initial: initial || null, title: title || "" });
+    data = await api("POST", "api/pick", { kind, filter: filter || "any", initial: initial || null, title: title || "" });
   } catch (error) {
     toast(error.message, "bad");
     return null;
@@ -126,7 +126,7 @@ async function browse(path) {
   const query = new URLSearchParams({ kind: picker.kind });
   if (path) query.set("path", path);
   try {
-    const data = await api("GET", `/api/browse?${query}`);
+    const data = await api("GET", `api/browse?${query}`);
     picker.path = data.path;
     $("#picker-path").textContent = data.path || "Выберите диск";
     $("#picker-up").onclick = () => browse(data.parent);

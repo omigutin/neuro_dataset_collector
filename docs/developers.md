@@ -116,6 +116,34 @@ with Collector(config) as collector:
 print(report.summary())
 ```
 
+## Веб-интерфейс внутри своего приложения
+
+Сборщик можно встроить в другое веб-приложение на FastAPI (например, NeuroFramework) отдельной вкладкой —
+и при этом он по-прежнему запускается сам по себе (`ndc web`).
+
+```python
+from fastapi import FastAPI
+from neuro_dataset_collector.web.app import mount_app
+
+app = FastAPI()
+session = mount_app(app, "/dataset")          # страница — /dataset/
+
+@app.on_event("shutdown")                     # или в lifespan приложения
+def close_dataset() -> None:
+    session.close()
+```
+
+Адреса на странице относительные, поэтому префикс может быть любым. Ссылки, которые открывают нужное сразу:
+
+| Параметр | Что откроется |
+|---|---|
+| `?video=<путь>&frame=<кадр>` | видео на кадре |
+| `?journal=<путь к журналу>` | вкладка «Журнал» с этим журналом |
+| `?review=<путь к ….review.json>` | вкладка «Участки» с этим файлом |
+| `&back=<адрес>&back_title=<текст>` | кнопка «← текст» в верхней строке |
+
+Путь к видео может быть с другого компьютера: тогда видео с тем же именем ищется в плейлисте.
+
 ## Логи
 
 Библиотека пишет в журнал `logging.getLogger("neuro_dataset_collector")`.

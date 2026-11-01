@@ -55,7 +55,7 @@ async function loadGroup(video, more) {
   const old = historyStore.groups.get(video);
   const offset = more && old ? old.items.filter((i) => i.kind === "saved").length : 0;
   try {
-    const data = await api("GET", `/api/history?${new URLSearchParams({ video, offset, limit: 100 })}`);
+    const data = await api("GET", `api/history?${new URLSearchParams({ video, offset, limit: 100 })}`);
     if (more && old) data.items = old.items.concat(data.items.filter((i) => i.kind === "saved"));
     if (more && old) data.rejected = old.rejected;
     historyStore.groups.set(video, data);
@@ -121,11 +121,11 @@ async function onHistoryClick(event) {
   if (!button) { goToFrame(video, item.frame); return; }
   try {
     if (button.dataset.act === "relabel") {
-      await api("POST", `/api/sample/${item.id}/relabel`, { video, label: button.dataset.label });
+      await api("POST", `api/sample/${item.id}/relabel`, { video, label: button.dataset.label });
       toast(`Кадр перенесён в «${button.dataset.label}»`, "ok");
     } else if (button.dataset.act === "delete") {
       if (!confirm("Удалить этот кадр в корзину?")) return;
-      await api("POST", `/api/sample/${item.id}/delete`, { video });
+      await api("POST", `api/sample/${item.id}/delete`, { video });
       toast("Кадр удалён в корзину", "ok");
     } else if (button.dataset.act === "force") {
       await goToFrame(video, item.frame);

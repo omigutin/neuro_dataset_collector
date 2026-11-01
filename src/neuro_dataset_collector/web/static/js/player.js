@@ -35,7 +35,7 @@ function toggleModel() {
 async function loadAnswers(index) {
   if (!modelOn()) return;
   try {
-    const data = await api("GET", `/api/model/answers/${index}`);
+    const data = await api("GET", `api/model/answers/${index}`);
     if (data.frame !== state.frame) return;
     $("#model-answers").innerHTML = `<span class="muted">Модель:</span>` + data.answers.map((a) =>
       `<span class="answer"><span class="swatch" style="background:${classColor(a.label)}"></span>${escapeHtml(a.zone)}: <b>${escapeHtml(a.label || "—")}</b>
@@ -54,7 +54,7 @@ async function chooseRegions() {
   const path = await pickPath("file", "json", start, "Выберите файл разметки (LabelMe json)");
   if (!path) return;
   try {
-    await applyVideo(await api("POST", "/api/video/regions", { path }), state.frame);
+    await applyVideo(await api("POST", "api/video/regions", { path }), state.frame);
     await loadConfig();
   } catch (error) {
     toast(error.message, "bad");
@@ -65,7 +65,7 @@ async function noRegions() {
   stopEdit();
   closeRegionsMenu();
   try {
-    await applyVideo(await api("POST", "/api/video/regions", { path: null }), state.frame);
+    await applyVideo(await api("POST", "api/video/regions", { path: null }), state.frame);
     await loadConfig();
   } catch (error) {
     toast(error.message, "bad");
@@ -74,7 +74,7 @@ async function noRegions() {
 
 async function refreshVideo() {
   try {
-    await applyVideo(await api("GET", "/api/video"), state.frame);
+    await applyVideo(await api("GET", "api/video"), state.frame);
   } catch (error) {
     toast(error.message, "bad");
   }
@@ -135,7 +135,7 @@ function renderZones() {
 async function setZones(ids) {
   if (!ids.length) { toast("Нужна хотя бы одна зона", "bad"); renderZones(); return; }
   try {
-    const info = await api("POST", "/api/video/zones", { ids });
+    const info = await api("POST", "api/video/zones", { ids });
     await applyVideo(info, state.frame);
   } catch (error) {
     toast(error.message, "bad");
@@ -166,7 +166,7 @@ function onFrameClick(event) {
 async function loadCounts() {
   if (!state.info || !state.info.video) { state.counts = {}; renderLegend(); return; }
   try {
-    const data = await api("GET", "/api/stats?scope=video");
+    const data = await api("GET", "api/stats?scope=video");
     state.counts = data.labels || {};
     const item = state.playlist.items.find((it) => it.path === state.info.video);
     if (item && item.labels !== null) {
@@ -205,14 +205,14 @@ function showFrame(index) {
   $("#seek").value = index;
   $("#frame-number").value = index;
   const model = modelOn() && !state.edit ? 1 : 0;
-  $("#frame").src = `/api/video/frame/${index}?zones=${state.edit ? 0 : 1}&model=${model}&t=${Date.now()}`;
+  $("#frame").src = `api/video/frame/${index}?zones=${state.edit ? 0 : 1}&model=${model}&t=${Date.now()}`;
   rememberPosition();
 }
 
 // Запоминаем позицию не чаще раза в 2 секунды — чтобы при следующем запуске продолжить с того же места.
 function rememberPosition() {
   clearTimeout(state.positionTimer);
-  state.positionTimer = setTimeout(() => api("POST", "/api/video/position", { frame: state.frame }).catch(() => {}), 2000);
+  state.positionTimer = setTimeout(() => api("POST", "api/video/position", { frame: state.frame }).catch(() => {}), 2000);
 }
 
 function onFrameLoaded() {
@@ -233,7 +233,7 @@ function onFrameError() {
 
 // Причина, почему кадр с ответами модели не показался (например, не установлен ultralytics).
 async function loadAnswersError() {
-  try { await api("GET", `/api/model/answers/${state.frame}`); } catch (error) { toast(error.message, "bad"); }
+  try { await api("GET", `api/model/answers/${state.frame}`); } catch (error) { toast(error.message, "bad"); }
 }
 
 function play() {
@@ -253,7 +253,7 @@ async function saveCurrent(label, force, onlyRegions) {
   if (!state.info || !state.info.video) { toast("Сначала выберите видео", "bad"); return; }
   if (autoRunning()) { toast("Идёт автонарезка — дождитесь окончания или остановите её", "bad"); return; }
   try {
-    const data = await api("POST", "/api/save", { frame: state.frame, label, regions: onlyRegions || null, force, model: modelOn() });
+    const data = await api("POST", "api/save", { frame: state.frame, label, regions: onlyRegions || null, force, model: modelOn() });
     data.results.forEach((r) => toast(r.message, r.ok ? "ok" : "bad"));
     loadCounts().then(renderPlaylist);
     loadGroup(state.info.video);

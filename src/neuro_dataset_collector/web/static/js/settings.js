@@ -158,7 +158,7 @@ function applyConfig(data) {
 }
 
 async function loadConfig() {
-  const data = await api("GET", "/api/config");
+  const data = await api("GET", "api/config");
   applyConfig(data);
   fillSettings(data.config);
 }
@@ -166,7 +166,7 @@ async function loadConfig() {
 // Записывает настройки на сервер; вызывается при любом изменении поля (с небольшой задержкой).
 async function putConfig(config, quiet) {
   try {
-    applyConfig(await api("PUT", "/api/config", config));
+    applyConfig(await api("PUT", "api/config", config));
     if (!quiet) {
       $("#settings-status").textContent = "сохранено ✓";
       setTimeout(() => ($("#settings-status").textContent = ""), 2000);
@@ -187,7 +187,7 @@ function scheduleSettingsSave() {
 
 async function applyYaml() {
   try {
-    applyConfig(await api("PUT", "/api/config/yaml", { text: $("#yaml").value }));
+    applyConfig(await api("PUT", "api/config/yaml", { text: $("#yaml").value }));
     fillSettings(state.config);
     toast("Настройки применены", "ok");
     await refreshVideo();
@@ -200,7 +200,7 @@ async function openConfigFile() {
   const path = await pickPath("file", "yaml", $("#config-name").title, "Открыть файл настроек");
   if (!path) return;
   try {
-    const data = await api("POST", "/api/config/open", { path });
+    const data = await api("POST", "api/config/open", { path });
     applyConfig(data);
     fillSettings(data.config);
     toast(`Настройки: ${path}`, "ok");
@@ -214,7 +214,7 @@ async function saveConfigAs() {
   const path = await pickPath("save", "yaml", $("#config-name").title, "Сохранить настройки в файл");
   if (!path) return;
   try {
-    applyConfig(await api("POST", "/api/config/save-as", { path }));
+    applyConfig(await api("POST", "api/config/save-as", { path }));
     toast(`Настройки сохранены: ${path}`, "ok");
   } catch (error) {
     toast(error.message, "bad");
@@ -279,7 +279,7 @@ async function saveClasses() {
   c.consistency.trusted_flips = Object.fromEntries(Object.entries(c.consistency.trusted_flips || {})
     .filter(([k]) => known(k)).map(([k, list]) => [k, list.filter(known)]));
   try {
-    applyConfig(await api("PUT", "/api/config", c));
+    applyConfig(await api("PUT", "api/config", c));
     fillSettings(state.config);
     $("#classes-dialog").close();
     toast("Классы сохранены", "ok");

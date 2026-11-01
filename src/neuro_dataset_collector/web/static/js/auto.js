@@ -15,7 +15,7 @@ async function autoStart() {
   if (state.edit) { toast("Сначала сохраните или отмените правку зон", "bad"); return; }
   try {
     pause();
-    await api("POST", "/api/auto/start", { scope, mode });
+    await api("POST", "api/auto/start", { scope, mode });
     pollAuto();
   } catch (error) {
     toast(error.message, "bad");
@@ -24,7 +24,7 @@ async function autoStart() {
 
 async function autoStop() {
   try {
-    await api("POST", "/api/auto/stop");
+    await api("POST", "api/auto/stop");
   } catch (error) {
     toast(error.message, "bad");
   }
@@ -41,7 +41,7 @@ function autoProgress(s) {
 async function pollAuto() {
   clearTimeout(autoLoop.timer);
   let s;
-  try { s = await api("GET", "/api/auto/status"); } catch (error) { autoLoop.timer = setTimeout(pollAuto, 2000); return; }
+  try { s = await api("GET", "api/auto/status"); } catch (error) { autoLoop.timer = setTimeout(pollAuto, 2000); return; }
   const wasRunning = autoRunning();
   state.auto = s;
   const where = s.total > 1 ? `видео ${s.index} из ${s.total}: ${s.video}` : s.video;
@@ -88,7 +88,7 @@ function showAutoView(on) {
 
 function nextAutoFrame() {
   if (!autoRunning()) return;
-  $("#auto-frame").src = `/api/auto/frame?t=${Date.now()}`;
+  $("#auto-frame").src = `api/auto/frame?t=${Date.now()}`;
 }
 
 function bindAuto() {

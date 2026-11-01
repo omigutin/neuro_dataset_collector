@@ -64,7 +64,7 @@ async function applyEdit() {
   const round = (v) => Math.round(v * 10) / 10;
   const regions = Object.fromEntries(state.edit.regions.map((r) => [r.id, { points: r.points.map(([x, y]) => [round(x), round(y)]), shape: r.shape }]));
   try {
-    const info = await api("POST", "/api/video/regions/edit", { regions });
+    const info = await api("POST", "api/video/regions/edit", { regions });
     stopEdit();
     await applyVideo(info, state.frame);
     toast(`Разметка сохранена рядом с видео: ${info.regions_file}`, "ok");
@@ -76,10 +76,10 @@ async function applyEdit() {
 
 async function saveRegionsAs() {
   try {
-    const target = await api("GET", "/api/video/regions/save-target");
+    const target = await api("GET", "api/video/regions/save-target");
     const path = await pickPath("save", "json", target.path, "Сохранить файл разметки");
     if (!path) return;
-    const saved = await api("POST", "/api/video/regions/save-as", { path });
+    const saved = await api("POST", "api/video/regions/save-as", { path });
     toast(`Разметка сохранена: ${saved.path}`, "ok");
     loadPlaylist();
   } catch (error) {

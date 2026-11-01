@@ -82,7 +82,7 @@ class RejectionLog:
             "reason": item.result.reason.value if item.result.reason else None,
             "message": item.result.message,
             "similar_to": str(item.result.similar_to) if item.result.similar_to else None,
-            "image": f"/api/rejected/{item.id}.jpg",
+            "image": f"api/rejected/{item.id}.jpg",
         } for item in reversed(found)]
 
 

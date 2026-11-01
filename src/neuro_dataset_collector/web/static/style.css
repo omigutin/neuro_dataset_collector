@@ -244,3 +244,4 @@ figure.crop .saved { color: var(--ok); font-weight: 600; margin-left: 6px; }
 .check-card .muted { display: block; }
 .check-pair { border: 1px solid var(--line); border-radius: 6px; padding: 6px; margin-bottom: 8px; }
 .check-pair .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 4px 0; }
+a.chip { text-decoration: none; color: inherit; display: inline-block; }

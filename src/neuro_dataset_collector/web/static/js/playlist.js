@@ -25,7 +25,7 @@ async function openVideo(path) {
   stopEdit();
   try {
     pause();
-    const info = await api("POST", "/api/video/open", { path });
+    const info = await api("POST", "api/video/open", { path });
     if (info.regions_origin === "video") toast(`Разметка рядом с видео: ${fileName(info.regions_file)}`, "ok");
     else if (info.suggested_regions) toast(`Разметка по номеру камеры: ${fileName(info.suggested_regions)}`, "ok");
     await applyVideo(info, info.frame);
@@ -39,7 +39,7 @@ async function chooseFolder() {
   const path = await pickPath("dir", null, state.playlist.dir || (state.info && state.info.video), "Папка с видео");
   if (!path) return;
   try {
-    state.playlist = await api("POST", "/api/playlist", { path });
+    state.playlist = await api("POST", "api/playlist", { path });
     renderPlaylist();
     if (!state.playlist.items.length) { toast("В папке нет видео", "bad"); return; }
     const inList = state.playlist.items.some((item) => item.path === (state.info && state.info.video));
@@ -51,7 +51,7 @@ async function chooseFolder() {
 
 async function loadPlaylist() {
   try {
-    state.playlist = await api("GET", "/api/playlist");
+    state.playlist = await api("GET", "api/playlist");
     renderPlaylist();
   } catch (error) {
     toast(error.message, "bad");
@@ -123,7 +123,7 @@ function onPlaylistClick(event) {
 
 async function openFolder(video) {
   try {
-    await api("POST", "/api/open-folder", { video });
+    await api("POST", "api/open-folder", { video });
   } catch (error) {
     toast(error.message, "bad");
   }

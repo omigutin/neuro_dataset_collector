@@ -35,7 +35,7 @@ function activateStrip(kind) {
 function cropUrl(video, item, journalPath) {
   const query = new URLSearchParams({ video, frame: item.frame, zone: item.zone });
   if (journalPath) query.set("journal", journalPath);
-  return `/api/journal/crop?${query}`;
+  return `api/journal/crop?${query}`;
 }
 
 function renderStrip(container, video, journalPath, items, append) {
@@ -63,7 +63,7 @@ function markSelected() {
 
 // Видео журнала или участка на этом компьютере (журнал мог быть записан на другом).
 async function localVideo(video) {
-  const data = await api("GET", `/api/resolve-video?${new URLSearchParams({ path: video })}`);
+  const data = await api("GET", `api/resolve-video?${new URLSearchParams({ path: video })}`);
   return data.path;
 }
 
@@ -98,7 +98,7 @@ function stripKey(label, force) {
 
 async function saveStripItem(item, label, force) {
   try {
-    const data = await api("POST", "/api/journal/save", {
+    const data = await api("POST", "api/journal/save", {
       video: strip.video, frame: item.frame, zone: item.zone, label, journal: strip.journal || null, force,
     });
     data.results.forEach((r) => toast(r.message, r.ok ? "ok" : "bad"));
@@ -123,7 +123,7 @@ async function saveStripItem(item, label, force) {
 
 async function loadJournals(select) {
   try {
-    const data = await api("GET", "/api/journals");
+    const data = await api("GET", "api/journals");
     journal.list = data.items;
     renderJournalSelect(select);
   } catch (error) {
@@ -173,7 +173,7 @@ async function queryJournal(more, first) {
   if (!journal.path) return;
   const offset = more ? journal.items.length : 0;
   try {
-    const data = await api("POST", "/api/journal/query", { path: journal.path, filter: journalFilter(), offset, limit: 60 });
+    const data = await api("POST", "api/journal/query", { path: journal.path, filter: journalFilter(), offset, limit: 60 });
     journal.data = data;
     if (first) renderJournalFilters(data);
     journal.items = more ? journal.items.concat(data.items) : data.items;
@@ -217,7 +217,7 @@ async function pickJournal() {
 
 async function openJournal(path) {
   try {
-    const data = await api("POST", "/api/journals/open", { path });
+    const data = await api("POST", "api/journals/open", { path });
     journal.list = data.items;
     journal.data = null;
     setSide("journal");
@@ -241,7 +241,7 @@ async function pickReview() {
 
 async function openReview(path) {
   try {
-    review.data = await api("GET", `/api/review?${new URLSearchParams({ path })}`);
+    review.data = await api("GET", `api/review?${new URLSearchParams({ path })}`);
     review.path = path;
     review.segment = null;
     review.items = [];
@@ -283,7 +283,7 @@ async function onReviewClick(event) {
   const index = Number(row.dataset.i);
   if (event.target.matches("input[data-done]")) {
     try {
-      review.data = await api("POST", "/api/review/done", { path: review.path, index, done: event.target.checked });
+      review.data = await api("POST", "api/review/done", { path: review.path, index, done: event.target.checked });
       renderReview();
     } catch (error) {
       toast(error.message, "bad");
@@ -294,7 +294,7 @@ async function onReviewClick(event) {
   review.segment = index;
   renderReview();
   try {
-    const data = await api("GET", `/api/review/items?${new URLSearchParams({ path: review.path, index })}`);
+    const data = await api("GET", `api/review/items?${new URLSearchParams({ path: review.path, index })}`);
     review.items = data.items;
     activateStrip("review");
     renderStrip($("#review-grid"), review.data.video, review.data.journal, review.items);
@@ -309,9 +309,22 @@ async function onReviewClick(event) {
 
 // ---------------------------------------------------------------- запуск
 
-// Ссылка с параметрами: ?journal=… — открыть журнал, ?review=… — участки (так открывает Production Counter).
+// Ссылка с параметрами (так открывает Production Counter): ?review=… — участки, ?journal=… — журнал,
+// ?video=…&frame=… — видео на кадре; &back=адрес&back_title=текст — кнопка возврата в верхней строке.
 async function openFromLink() {
   const params = new URLSearchParams(location.search);
+  if (params.get("back")) {
+    $("#back-link").href = params.get("back");
+    $("#back-link").textContent = `← ${params.get("back_title") || "Назад"}`;
+    $("#back-link").hidden = false;
+  }
+  if (params.get("video")) {
+    try {
+      await goToFrame(await localVideo(params.get("video")), Number(params.get("frame")) || 0);
+    } catch (error) {
+      toast(error.message, "bad");
+    }
+  }
   if (params.get("review")) await openReview(params.get("review"));
   else if (params.get("journal")) await openJournal(params.get("journal"));
 }

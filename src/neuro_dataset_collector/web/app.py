@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import os
 import socket
@@ -17,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
@@ -29,7 +30,7 @@ from . import DEFAULT_PORT
 from .picker import pick_path
 from .session import AutoMode, AutoScope, WebSession
 
-__all__ = ["APP_ID", "create_app", "find_port", "run"]
+__all__ = ["APP_ID", "create_app", "find_port", "mount_app", "run"]
 
 # Сколько следующих портов пробовать, если порт занят другой программой.
 _PORT_ATTEMPTS = 20
@@ -182,8 +183,12 @@ def create_app(session: WebSession) -> FastAPI:
     async def no_stale_files(request: Request, call_next: Callable[[Request], Any]) -> Any:
         # Браузер должен сверять файлы интерфейса с сервером, иначе после обновления программы
         # остаются старые стили и скрипт.
+        # Путь — до вызова: маршрутизация дальше меняет root_path в том же scope.
+        path, root = request.url.path, request.scope.get("root_path", "")
+        if root and path.startswith(root):
+            path = path[len(root):]
         response = await call_next(request)
-        if request.url.path == "/" or request.url.path.startswith("/static/"):
+        if path in ("", "/") or path.startswith("/static/"):
             response.headers["Cache-Control"] = "no-cache"
         return response
 
@@ -192,8 +197,13 @@ def create_app(session: WebSession) -> FastAPI:
         return {"app": APP_ID, "version": __version__}
 
     @app.get("/", response_class=HTMLResponse)
-    def index() -> str:
-        return (_STATIC / "index.html").read_text(encoding="utf-8").replace("{{version}}", _static_version())
+    def index(request: Request) -> Response:
+        # Адреса на странице относительные (её можно встроить в другое приложение под своим префиксом),
+        # поэтому адрес страницы должен заканчиваться на «/».
+        if not request.url.path.endswith("/"):
+            return RedirectResponse(request.url.replace(path=request.url.path + "/"), status_code=307)
+        page = (_STATIC / "index.html").read_text(encoding="utf-8").replace("{{version}}", _static_version())
+        return HTMLResponse(page)
 
     # ---- настройки ----
 
@@ -483,6 +493,20 @@ def create_app(session: WebSession) -> FastAPI:
                 "frames": report.frames}
 
     return app
+
+
+def mount_app(parent: FastAPI, prefix: str = "/dataset", config_path: Path | None = None) -> WebSession:
+    """
+        Встраивает сборщик в другое веб-приложение (например, NeuroFramework) по адресу prefix
+        (страница — prefix + "/"). Возвращает сессию: приложение-хозяин закрывает её при остановке
+        (session.close()); на случай, если не закроет, — закрытие при выходе из программы.
+        Ссылки на страницу: prefix/?video=…&frame=…, prefix/?journal=…, prefix/?review=…, &back=адрес_возврата.
+    """
+    prefix = "/" + prefix.strip("/")
+    session = WebSession.open(config_path.resolve() if config_path else None)
+    parent.mount(prefix, create_app(session), name="neuro_dataset_collector")
+    atexit.register(session.close)
+    return session
 
 
 def _port_free(host: str, port: int) -> bool:

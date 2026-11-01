@@ -31,7 +31,7 @@ function defaultExportDir(data) {
 
 async function loadStats() {
   try {
-    const data = await api("GET", `/api/stats?scope=${summary.scope}`);
+    const data = await api("GET", `api/stats?scope=${summary.scope}`);
     const used = new Set();
     data.rows.forEach((row) => Object.keys(row.labels).forEach((k) => used.add(k)));
     const columns = data.classes.concat(used.has("") ? [""] : []).concat([...used].filter((k) => k && !data.classes.includes(k)));
@@ -64,7 +64,7 @@ const scopeText = () => (summary.scope === "playlist" ? "всех видео п�
 async function runSync() {
   if (!confirm(`Вы просмотрели кадры ${scopeText()} и разложили их по папкам? Сверка отметит их как проверенные.`)) return;
   try {
-    const r = await api("POST", "/api/sync", { scope: summary.scope });
+    const r = await api("POST", "api/sync", { scope: summary.scope });
     let text = r.summary;
     if (r.unknown_files.length) text += "\n\nФайлы без истории:\n" + r.unknown_files.join("\n");
     $("#sync-result").textContent = text;
@@ -80,7 +80,7 @@ async function runExport() {
   const outDir = $("#export-dir").value.trim();
   if (!outDir) { toast("Укажите папку выгрузки", "bad"); return; }
   try {
-    const r = await api("POST", "/api/export", {
+    const r = await api("POST", "api/export", {
       out_dir: outDir,
       scope: summary.scope,
       only_new: !$("#export-all").checked,
@@ -101,7 +101,7 @@ async function startCheck() {
   if (!modelSet()) { toast("Модель не задана: ⚙ → Автонарезка → Модель", "bad"); return; }
   try {
     check.hidden.clear();
-    await api("POST", "/api/check/start", { scope: summary.scope, min_conf: Number($("#check-conf").value) || 0 });
+    await api("POST", "api/check/start", { scope: summary.scope, min_conf: Number($("#check-conf").value) || 0 });
     pollCheck();
   } catch (error) {
     toast(error.message, "bad");
@@ -109,14 +109,14 @@ async function startCheck() {
 }
 
 async function stopCheck() {
-  try { await api("POST", "/api/check/stop"); } catch (error) { toast(error.message, "bad"); }
+  try { await api("POST", "api/check/stop"); } catch (error) { toast(error.message, "bad"); }
   pollCheck();
 }
 
 async function pollCheck() {
   clearTimeout(check.timer);
   let s;
-  try { s = await api("GET", "/api/check/status"); } catch (error) { return; }
+  try { s = await api("GET", "api/check/status"); } catch (error) { return; }
   check.data = s;
   $("#check-start").disabled = s.running;
   $("#check-stop").disabled = !s.running;
@@ -174,11 +174,11 @@ async function onCheckClick(event) {
   const video = button.dataset.video || item.video;
   try {
     if (button.dataset.act === "relabel") {
-      await api("POST", `/api/sample/${button.dataset.id}/relabel`, { video, label: button.dataset.label });
+      await api("POST", `api/sample/${button.dataset.id}/relabel`, { video, label: button.dataset.label });
       toast(`Кадр перенесён в «${button.dataset.label}»`, "ok");
     } else if (button.dataset.act === "delete") {
       if (!confirm("Удалить этот кадр в корзину?")) return;
-      await api("POST", `/api/sample/${button.dataset.id}/delete`, { video });
+      await api("POST", `api/sample/${button.dataset.id}/delete`, { video });
       toast("Кадр удалён в корзину", "ok");
     }
     check.hidden.add(key);

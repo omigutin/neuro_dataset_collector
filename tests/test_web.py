@@ -202,7 +202,7 @@ def test_single_video_fills_playlist_with_its_folder(client: TestClient, workspa
 def test_interface_files_are_not_cached(client: TestClient) -> None:
     page = client.get("/")
     assert page.headers["cache-control"] == "no-cache"
-    assert "/static/js/main.js?v=" in page.text and "{{version}}" not in page.text
+    assert '"static/js/main.js?v=' in page.text and "{{version}}" not in page.text
     assert client.get("/static/js/main.js").headers["cache-control"] == "no-cache"
 
 
@@ -330,3 +330,24 @@ def test_stats_sync_export_for_playlist(client: TestClient, workspace: Path) -> 
     exported = client.post("/api/export", json={"out_dir": str(out), "scope": "playlist"}).json()
     assert exported["exported"] == 4 and exported["by_label"] == {"EMPTY": 2, "FULL": 2}
     assert len(list((out / "FULL").iterdir())) == 2 and len(list((out / "EMPTY").iterdir())) == 2
+
+
+def test_mounted_into_another_app(home: Path) -> None:
+    from fastapi import FastAPI
+
+    from neuro_dataset_collector.web.app import mount_app
+
+    host = FastAPI()
+    session = mount_app(host, "/dataset/")
+    try:
+        with TestClient(host) as test_client:
+            redirect = test_client.get("/dataset", follow_redirects=False)
+            assert redirect.status_code == 307 and redirect.headers["location"].endswith("/dataset/")
+            page = test_client.get("/dataset/")
+            assert "Сборщик датасета" in page.text and page.headers["cache-control"] == "no-cache"
+            # Адреса на странице относительные — работают под префиксом.
+            assert 'src="/static' not in page.text and "api(\"GET\", \"/api" not in page.text
+            assert test_client.get("/dataset/static/js/core.js").headers["cache-control"] == "no-cache"
+            assert test_client.get("/dataset/api/ping").json()["app"] == "neuro_dataset_collector"
+    finally:
+        session.close()
