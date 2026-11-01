@@ -122,15 +122,19 @@ print(report.summary())
 и при этом он по-прежнему запускается сам по себе (`ndc web`).
 
 ```python
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from neuro_dataset_collector.web.app import mount_app
 
-app = FastAPI()
-session = mount_app(app, "/dataset")          # страница — /dataset/
-
-@app.on_event("shutdown")                     # или в lifespan приложения
-def close_dataset() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    yield
     session.close()
+
+app = FastAPI(lifespan=lifespan)
+session = mount_app(app, "/dataset")          # страница — /dataset/
 ```
 
 Адреса на странице относительные, поэтому префикс может быть любым. Ссылки, которые открывают нужное сразу:
