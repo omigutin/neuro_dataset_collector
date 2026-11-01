@@ -85,3 +85,27 @@ def test_video_from_another_computer_found_in_playlist(client: Any, workspace: P
     found = client.get("/api/resolve-video", params={"path": "D:/other/ml_cam25_0101.avi"}).json()
     assert found["path"] == str(workspace / "ml_cam25_0101.avi")
     assert client.get("/api/resolve-video", params={"path": "D:/other/none.avi"}).status_code == 404
+
+
+def test_timeline_with_saved_frames_and_journal(client: Any, workspace: Path, run_dir: Path) -> None:
+    video = str(workspace / "ml_cam25_0101.avi")
+    client.post("/api/video/open", json={"path": video})
+    client.post("/api/save", json={"frame": 4, "label": "FULL", "regions": ["1"]})
+    data = client.get("/api/video/timeline").json()
+    assert data["saved"] == [[4, "FULL"]] and data["model"] is None and data["frames"] > 0
+    base = str(run_dir / "ml_cam25_0101")
+    data = client.get("/api/video/timeline", params={"journal": base, "zone": "1"}).json()
+    assert data["model"]["zone"] == "1" and data["model"]["runs"] == [[0, 4, "EMPTY"], [5, 6, "FULL"], [7, 11, "EMPTY"]]
+    frame = client.get("/api/journal/frame", params={"video": video, "frame": 5, "zone": "1", "journal": base})
+    assert frame.status_code == 200 and frame.headers["content-type"] == "image/jpeg"
+
+
+def test_regions_from_another_camera_are_flagged(client: Any, workspace: Path) -> None:
+    other = workspace / "jsons" / "norebo_cam30.json"
+    other.write_text((workspace / "jsons" / "norebo_cam25.json").read_text(encoding="utf-8"), encoding="utf-8")
+    client.post("/api/video/open", json={"path": str(workspace / "ml_cam25_0101.avi")})
+    assert client.get("/api/video").json()["regions_warning"] is None
+    info = client.post("/api/video/regions", json={"path": str(other)}).json()
+    assert "камеры 30" in info["regions_warning"] and "камера 25" in info["regions_warning"]
+    playlist = client.get("/api/playlist").json()["items"][0]
+    assert playlist["journal"] is False

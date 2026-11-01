@@ -401,6 +401,17 @@ def create_app(session: WebSession) -> FastAPI:
                                                                       min(500, max(1, request.limit))))
         return result
 
+    @app.get("/api/video/timeline")
+    def video_timeline(journal: str | None = Query(None), zone: str | None = Query(None)) -> dict[str, Any]:
+        result: dict[str, Any] = _call(lambda: session.timeline(journal, zone))
+        return result
+
+    @app.get("/api/journal/frame")
+    def journal_frame(video: str = Query(...), frame: int = Query(..., ge=0), zone: str = Query(...),
+                      journal: str | None = Query(None)) -> Response:
+        image = _call(lambda: session.journal_frame(video, frame, zone, journal))
+        return Response(image, media_type="image/jpeg", headers={"Cache-Control": "max-age=3600"})
+
     @app.get("/api/journal/crop")
     def journal_crop(video: str = Query(...), frame: int = Query(..., ge=0), zone: str = Query(...),
                      journal: str | None = Query(None)) -> Response:

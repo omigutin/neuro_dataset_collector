@@ -184,6 +184,32 @@ class JournalTable:
         page = rows[max(0, offset): max(0, offset) + max(0, limit)]
         return JournalPage([self._row(int(i)) for i in page], int(rows.size), labels)
 
+    def runs(self, zone: str, max_runs: int = 2000) -> list[tuple[int, int, str | None]]:
+        """
+            Ответы модели в зоне отрезками «кадр с, кадр по, класс» (для шкалы времени).
+            Если отрезков больше max_runs, короткие сливаются с соседними: на шкале их всё равно не видно.
+        """
+        if zone not in self.zones:
+            return []
+        rows = np.flatnonzero(self._zone_ids == self.zones.index(zone))
+        if rows.size == 0:
+            return []
+        frames, labels = self._frames[rows], self._label_ids[rows]
+        starts = np.concatenate(([0], np.flatnonzero(labels[1:] != labels[:-1]) + 1))
+        ends = np.concatenate((starts[1:], [rows.size])) - 1
+        result = [(int(frames[s]), int(frames[e]), self.labels[int(labels[s])] if labels[s] != _NONE else None)
+                  for s, e in zip(starts, ends, strict=True)]
+        if len(result) > max_runs:
+            step = (result[-1][1] - result[0][0] + 1) / max_runs
+            merged: list[tuple[int, int, str | None]] = []
+            for start, end, label in result:
+                if merged and (end - start + 1 < step or merged[-1][2] == label):
+                    merged[-1] = (merged[-1][0], end, merged[-1][2])
+                else:
+                    merged.append((start, end, label))
+            result = merged
+        return result
+
     def answer(self, frame: int, zone: str) -> JournalRow | None:
         """ Ответ модели в зоне на кадре или на ближайшем предыдущем проверенном кадре. """
         if zone not in self.zones:

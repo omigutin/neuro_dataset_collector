@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -56,6 +57,8 @@ AutoScope = Literal["video", "playlist"]
 AutoMode = Literal["collect", "model"]
 # Кадры, которые показываются в истории (удалённые и сбойные не показываются).
 _HISTORY_STATUSES = (SampleStatus.PENDING, SampleStatus.SUSPECT, SampleStatus.VERIFIED)
+# Номер камеры в имени видео или файла разметки.
+_CAMERA = re.compile(r"cam0*(\d+)", re.IGNORECASE)
 # Сколько секунд зона подсвечивается после сохранения или отказа при показе автонарезки.
 _MARK_SECONDS = 0.6
 
@@ -496,8 +499,25 @@ class WebSession:
                             for r in regions],
                 "regions_editable": bool(shapes),
                 "regions_sidecar": str(sidecar_regions_file(self.video)),
+                "regions_warning": self._regions_warning(info["shapes"]),
             })
             return info
+
+    def _regions_warning(self, shapes: list[dict[str, Any]]) -> str | None:
+        """ Что не так с разметкой открытого видео: файл от другой камеры или в нём нет нужных зон. """
+        file = self.config.regions.file
+        if self.video is None or self.config.regions.source != RegionSource.FILE or file is None:
+            return None
+        if not file.is_file():
+            return f"Файл разметки не найден: {file.name}"
+        video_cam, file_cam = _CAMERA.search(self.video.stem), _CAMERA.search(file.stem)
+        if self._regions_origin() is None and video_cam and file_cam and video_cam.group(1) != file_cam.group(1):
+            return (f"Разметка от камеры {file_cam.group(1)}, а видео — камера {video_cam.group(1)}: "
+                    f"для cam{video_cam.group(1)} файл не найден или их несколько")
+        if not shapes:
+            labels = ", ".join(self.config.regions.labels) or "любыми"
+            return f"В {file.name} нет зон с метками {labels}"
+        return None
 
     def _regions_origin(self) -> RegionsOrigin | None:
         """ Откуда взят текущий файл зон: рядом с видео или по номеру камеры. """
@@ -842,7 +862,9 @@ class WebSession:
         for video in self.playlist_videos():
             found = find_regions_file(video, search_dir)
             labels = self._label_counts(video)
+            journal = self.config.for_video(video).collection_dir / JOURNAL_DIR / f"{video.stem}.predictions.csv"
             items.append({
+                "journal": journal.is_file(),
                 "path": str(video),
                 "name": str(video.relative_to(self.playlist_dir)) if self.playlist_dir else video.name,
                 "saved": sum(labels.values()) if labels is not None else None,
@@ -1077,6 +1099,41 @@ class WebSession:
             if found.id == zone:
                 return found
         raise ValueError(f"Unknown zone {zone!r} for {video.name}")
+
+    def timeline(self, journal: str | None, zone: str | None) -> dict[str, Any]:
+        """
+            Шкала времени открытого видео: сохранённые кадры (кадр, класс) и ответы модели из журнала
+            отрезками по зоне (zone не задана — первая зона журнала).
+        """
+        if self.video is None:
+            raise FileNotFoundError("Video is not opened")
+        video = self.video
+        config = self.config_for_video(video)
+        saved: list[list[Any]] = []
+        if (config.catalog.root / CATALOG_FILENAME).exists():
+            catalog = self._acquire_catalog(config.catalog.root)
+            try:
+                records, _ = catalog.page(config.catalog.collection, video.stem, _HISTORY_STATUSES, 0, 100000)
+                saved = [[r.frame_index, r.label] for r in records]
+            finally:
+                self._release_catalog(config.catalog.root)
+        base = Path(journal) if journal else config.collection_dir / JOURNAL_DIR / video.stem
+        model: dict[str, Any] | None = None
+        if base.with_name(base.name + ".predictions.csv").is_file():
+            table = self._journals.table(base)
+            chosen = zone if zone in table.zones else (table.zones[0] if table.zones else None)
+            model = {"path": str(table.base), "zones": table.zones, "zone": chosen,
+                     "runs": table.runs(chosen) if chosen is not None else []}
+        return {"video": str(video), "frames": self._get_reader().frame_count, "saved": saved, "model": model}
+
+    def journal_frame(self, video: str, frame: int, zone: str, journal: str | None) -> bytes:
+        """ Кадр целиком с обведённой зоной (для просмотра выреза из журнала или участка). """
+        path = self.resolve_video(video)
+        image = self._journals.frame(path, frame).image.copy()
+        region = self.zone_region(path, zone, Path(journal) if journal else None)
+        if region is not None:
+            self._draw_region(image, region, (255, 120, 40), filled=True)
+        return self._encode(image, 1280)
 
     def journal_crop(self, video: str, frame: int, zone: str, journal: str | None) -> bytes:
         """ Вырез зоны на кадре видео для показа. """
