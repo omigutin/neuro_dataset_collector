@@ -88,6 +88,12 @@ function videoTitle(info) {
 
 async function applyVideo(info, frame) {
   state.info = info;
+  // Сервер сам меняет файл разметки (при открытии видео, после правки зон): иначе следующее сохранение
+  // настроек вернуло бы старый файл.
+  const regions = state.config && state.config.regions;
+  if (regions && ((regions.file || null) !== (info.regions_file || null) || regions.source !== info.regions_source)) {
+    await loadConfig();
+  }
   const hasVideo = !!info.video;
   $("#video-title").textContent = hasVideo ? videoTitle(info) : "Выберите папку с видео 📁 или одно видео 🎞";
   $("#video-title").title = info.video || "";
