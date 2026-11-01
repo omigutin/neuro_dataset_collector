@@ -305,7 +305,8 @@ class Collector:
             for zone, zone_predictions in self._pairs(frame, predictions, region):
                 if region_ids is not None and (zone.id if zone else FULL_FRAME_ID) not in region_ids:
                     continue
-                pending = self._make_pending(frame, zone, zone_predictions, label=label)
+                # Ручное сохранение без класса — «без класса», даже если модель ответила.
+                pending = self._make_pending(frame, zone, zone_predictions, label=label, label_from_model=False)
                 if pending is None:
                     results.append(SaveResult(SaveStatus.REJECTED, "Зона вне кадра", region_id=zone.id if zone else
                                               None, reason=RejectReason.EMPTY_REGION))
@@ -368,15 +369,16 @@ class Collector:
         raise ValueError("Predictions for several regions must be a mapping: region id -> predictions")
 
     def _make_pending(
-        self, frame: Frame, zone: Region | None, predictions: list[Prediction], label: str | None = None
+        self, frame: Frame, zone: Region | None, predictions: list[Prediction], label: str | None = None,
+        label_from_model: bool = True,
     ) -> _Pending | None:
-        """ Вырезает зону и готовит кандидата. """
+        """ Вырезает зону и готовит кандидата; без label класс берётся из ответа модели (если label_from_model). """
         crop = crop_region(frame.image, zone, self._config.regions.mask_outside, self._config.regions.padding)
         if crop is None:
             return None
         local = predictions_to_crop(predictions, crop) if self._config.predictions_space == PredictionsSpace.FRAME \
             else list(predictions)
-        if label is None and self._config.task == TaskType.CLASSIFY:
+        if label is None and label_from_model and self._config.task == TaskType.CLASSIFY:
             top = top_prediction(local)
             label = top.label if top else None
         candidate = Candidate(

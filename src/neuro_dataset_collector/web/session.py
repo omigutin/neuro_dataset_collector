@@ -23,8 +23,8 @@ from ..core.results import ExportReport, SaveResult, SyncReport
 from ..core.types import Frame, Point, Region, SampleStatus
 from ..export.roboflow import export_dataset
 from ..pipeline.collector import FULL_FRAME_ID, Collector
+from ..pipeline.model_run import ModelRunReport, ZoneAnswer, run_model
 from ..pipeline.offline import OfflineReport, collect_videos
-from ..predictors.base import create_predictor
 from ..regions.providers import (
     LabelMeRegions,
     RegionsOrigin,
@@ -39,9 +39,10 @@ from ..review.sync import sync_collection
 from ..sources.video import VideoReader, list_videos
 from ..storage.layout import IMAGES_DIR, SUSPECT_DIR
 from .history import RejectionLog, sample_item
+from .model_view import ModelView
 from .state import SessionState, default_config_path, load_state, save_state
 
-__all__ = ["AutoRunState", "AutoScope", "WebSession"]
+__all__ = ["AutoMode", "AutoRunState", "AutoScope", "WebSession"]
 
 # Сколько последних позиций в видео помнить между запусками.
 _MAX_POSITIONS = 500
@@ -49,6 +50,8 @@ _IMAGE_EXT = frozenset({".jpg", ".jpeg", ".png", ".bmp", ".webp"})
 
 # Автонарезка: только открытое видео или все видео плейлиста.
 AutoScope = Literal["video", "playlist"]
+# Что делает фоновый прогон: автонарезка по правилам или прогон моделью с записью журнала.
+AutoMode = Literal["collect", "model"]
 # Кадры, которые показываются в истории (удалённые и сбойные не показываются).
 _HISTORY_STATUSES = (SampleStatus.PENDING, SampleStatus.SUSPECT, SampleStatus.VERIFIED)
 # Сколько секунд зона подсвечивается после сохранения или отказа при показе автонарезки.
@@ -61,6 +64,7 @@ class AutoRunState:
 
     running: bool = False
     scope: str = "video"
+    mode: str = "collect"
     video: str = ""
     video_path: str = ""
     frame: int = 0
@@ -69,6 +73,8 @@ class AutoRunState:
     total: int = 0
     saved: int = 0
     frames: int = 0
+    matched: int = 0
+    journal: str = ""
     summary: str = ""
     error: str = ""
 
@@ -102,6 +108,8 @@ class WebSession:
     _auto_frame: Frame | None = None
     _auto_regions: list[Region] = field(default_factory=list)
     _auto_marks: dict[str, tuple[bool, float]] = field(default_factory=dict)
+    _auto_answers: list[ZoneAnswer] = field(default_factory=list)
+    _model: ModelView = field(default_factory=ModelView)
 
     # ---- запуск и сеанс -----------------------------------------------------------------------------
 
@@ -543,10 +551,16 @@ class WebSession:
         with self._lock:
             return self._get_reader().read(index)
 
-    def render(self, frame: Frame, max_width: int = 1280, zones: bool = True) -> bytes:
-        """ JPEG кадра для показа в браузере; zones — нарисовать зоны (без них — для правки зон). """
+    def render(self, frame: Frame, max_width: int = 1280, zones: bool = True, model: bool = False) -> bytes:
+        """
+            JPEG кадра для показа в браузере; zones — нарисовать зоны (без них — для правки зон),
+            model — нарисовать ответы модели по зонам.
+        """
         image = frame.image.copy()
-        if zones:
+        if model:
+            regions = self.collector().regions_for(frame.width, frame.height)
+            ModelView.draw(image, regions, self._answers(frame, regions), self.config.classes)
+        elif zones:
             selected = self.collector().regions_for(frame.width, frame.height)
             chosen = {region.id for region in selected}
             labelme = self._labelme()
@@ -583,14 +597,33 @@ class WebSession:
         x, y = int(region.bbox.x1), int(region.bbox.y1)
         cv2.putText(image, region.id, (x + 4, y + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
-    def save(self, index: int, label: str | None, region_ids: list[str] | None, force: bool) -> list[SaveResult]:
-        """ Ручное сохранение кадра (все или выбранные зоны). """
+    def _answers(self, frame: Frame, regions: list[Region]) -> list[ZoneAnswer]:
+        """ Ответы модели по зонам кадра открытого видео. """
+        return self._model.answers(self.effective_config(), str(self.video or ""), frame, regions)
+
+    def model_answers(self, index: int) -> dict[str, Any]:
+        """ Ответы модели по зонам кадра открытого видео. """
+        with self._lock:
+            frame = self._get_reader().read(index)
+            if frame is None:
+                raise IndexError(f"Frame {index} not found")
+            regions = self.collector().regions_for(frame.width, frame.height)
+            answers = self._answers(frame, regions)
+        return {"frame": index, "answers": ModelView.to_dict(answers)}
+
+    def save(self, index: int, label: str | None, region_ids: list[str] | None, force: bool,
+             model: bool = False) -> list[SaveResult]:
+        """ Ручное сохранение кадра (все или выбранные зоны); model — записать с кадром ответ модели. """
         with self._lock:
             frame = self._get_reader().read(index)
             if frame is None:
                 raise IndexError(f"Frame {index} not found")
             collector = self.collector()
-            results = collector.save(frame, label, region_ids=region_ids, force=force)
+            predictions = None
+            if model:
+                answers = self._answers(frame, collector.regions_for(frame.width, frame.height))
+                predictions = ModelView.predictions_by_zone(answers)
+            results = collector.save(frame, label, region_ids=region_ids, force=force, predictions=predictions)
             collector.flush()
             self.remember_frame(index)
             return results
@@ -601,8 +634,11 @@ class WebSession:
         """ Ход автонарезки. """
         return self._auto
 
-    def start_auto(self, scope: AutoScope = "video") -> None:
-        """ Запускает автонарезку в фоне: открытого видео или всех видео плейлиста. """
+    def start_auto(self, scope: AutoScope = "video", mode: AutoMode = "collect") -> None:
+        """
+            Запускает в фоне автонарезку или прогон моделью (mode="model": журнал ответов модели и,
+            по настройкам, сохранение вырезов, где модель не прошла условия): открытого видео или всего плейлиста.
+        """
         with self._lock:
             if self._auto.running:
                 return
@@ -614,17 +650,28 @@ class WebSession:
                 if self.video is None:
                     raise FileNotFoundError("Video is not opened")
                 videos = [self.video]
-            predictor = create_predictor(self.config.model, self.config.task)
-            self._auto = AutoRunState(running=True, scope=scope, total=len(videos))
+            if mode == "model" and self.config.model.path is None:
+                raise ValueError("Model is not set: choose a model file in settings")
+            predictor = self._model.predictor(self.config) if self.config.model.path is not None else None
+            self._auto = AutoRunState(running=True, scope=scope, mode=mode, total=len(videos))
             self._auto_stop.clear()
 
         def worker() -> None:
             total = OfflineReport()
+            model_total = ModelRunReport()
             try:
                 for number, video in enumerate(videos, start=1):
                     if self._auto_stop.is_set():
                         break
                     self._auto.video, self._auto.video_path, self._auto.index = video.name, str(video), number
+                    if mode == "model" and predictor is not None:
+                        done = self._model_one(video, predictor)
+                        model_total.frames += done.frames
+                        model_total.rows += done.rows
+                        model_total.matched += done.matched
+                        model_total.saved += done.saved
+                        self._auto.journal = str(done.journal or "")
+                        continue
                     report = self._collect_one(video, predictor)
                     total.videos += report.videos
                     total.frames += report.frames
@@ -634,7 +681,7 @@ class WebSession:
             except Exception as error:  # Ошибка показывается в интерфейсе, поток не должен падать молча.
                 self._auto.error = str(error)
             finally:
-                self._auto.summary = total.summary()
+                self._auto.summary = model_total.summary() if mode == "model" else total.summary()
                 self._auto.running = False
 
         self._auto_thread = threading.Thread(target=worker, name="ndc-auto", daemon=True)
@@ -669,6 +716,40 @@ class WebSession:
         finally:
             self._release_catalog(config.catalog.root)
 
+    def _model_one(self, video: Path, predictor: Any) -> ModelRunReport:
+        """ Прогон одного видео моделью: журнал в папке датасета, вырезы — по условиям из настроек. """
+        config = self.config_for_video(video)
+        try:
+            with VideoReader(video) as reader:
+                self._auto.video_frames = reader.frame_count
+        except OSError:
+            self._auto.video_frames = 0
+        catalog = self._acquire_catalog(config.catalog.root)
+        try:
+            with Collector(config, catalog=catalog) as collector:
+                self._auto_regions, self._auto_marks, self._auto_answers = [], {}, []
+
+                def on_frame(frame: Frame, answers: list[ZoneAnswer]) -> None:
+                    if self._auto_frame is None or not self._auto_regions:
+                        self._auto_regions = collector.regions_for(frame.width, frame.height)
+                    self._auto_frame, self._auto_answers = frame, answers
+                    self._auto.frame = frame.index
+                    self._auto.frames += 1
+
+                def on_result(result: SaveResult) -> None:
+                    if result.ok:
+                        self._auto.saved += 1
+                    self._auto_marks[result.region_id or FULL_FRAME_ID] = (result.ok, time.monotonic())
+
+                def on_match(frame: Frame, answer: ZoneAnswer, reason: str) -> None:
+                    self._auto.matched += 1
+
+                model_name = config.model.path.name if config.model.path is not None else ""
+                return run_model(collector, video, predictor, model_name=model_name, stop=self._auto_stop,
+                                 on_frame=on_frame, on_result=on_result, on_match=on_match)
+        finally:
+            self._release_catalog(config.catalog.root)
+
     def auto_frame(self, max_width: int = 1280) -> bytes | None:
         """
             Кадр, который сейчас обрабатывает автонарезка: зоны зелёные — только что сохранены,
@@ -680,6 +761,9 @@ class WebSession:
         cv2 = get_cv2()
         image = frame.image.copy()
         now = time.monotonic()
+        if self._auto.mode == "model":
+            ModelView.draw(image, self._auto_regions, self._auto_answers, self.config.classes)
+            return self._encode(image, max_width)
         for region in self._auto_regions:
             mark = self._auto_marks.get(region.id)
             fresh = mark is not None and now - mark[1] <= _MARK_SECONDS
@@ -864,6 +948,7 @@ class WebSession:
     def close(self) -> None:
         """ Освобождает ресурсы. """
         self.stop_auto()
+        self._model.close()
         with self._lock:
             self._close_reader()
             self._close_collector()

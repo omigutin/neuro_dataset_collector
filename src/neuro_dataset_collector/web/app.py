@@ -26,7 +26,7 @@ from ..config.models import NAME_PATTERN, dataset_dir_for_video
 from ..regions.providers import ShapeKind
 from . import DEFAULT_PORT
 from .picker import pick_path
-from .session import AutoScope, WebSession
+from .session import AutoMode, AutoScope, WebSession
 
 __all__ = ["APP_ID", "create_app", "find_port", "run"]
 
@@ -52,6 +52,7 @@ class SaveRequest(BaseModel):
     label: str | None = None
     regions: list[str] | None = None
     force: bool = False
+    model: bool = False
 
 
 class PickRequest(BaseModel):
@@ -90,9 +91,10 @@ class RegionsEditRequest(BaseModel):
 
 
 class AutoRequest(BaseModel):
-    """ Запуск автонарезки: открытое видео или весь плейлист. """
+    """ Запуск автонарезки или прогона моделью: открытое видео или весь плейлист. """
 
     scope: AutoScope = "video"
+    mode: AutoMode = "collect"
 
 
 class ExportRequest(BaseModel):
@@ -286,16 +288,22 @@ def create_app(session: WebSession) -> FastAPI:
         return {"frame": session.frame}
 
     @app.get("/api/video/frame/{index}")
-    def video_frame(index: int, zones: bool = Query(True)) -> Response:
+    def video_frame(index: int, zones: bool = Query(True), model: bool = Query(False)) -> Response:
         frame = _call(lambda: session.frame_at(index))
         if frame is None:
             raise HTTPException(404, {"errors": ["End of video"]})
-        return Response(session.render(frame, zones=zones), media_type="image/jpeg",
-                        headers={"Cache-Control": "no-store"})
+        image = _call(lambda: session.render(frame, zones=zones, model=model))
+        return Response(image, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/model/answers/{index}")
+    def model_answers(index: int) -> dict[str, Any]:
+        result: dict[str, Any] = _call(lambda: session.model_answers(index))
+        return result
 
     @app.post("/api/save")
     def save(request: SaveRequest) -> dict[str, Any]:
-        results = _call(lambda: session.save(request.frame, request.label, request.regions, request.force))
+        results = _call(lambda: session.save(request.frame, request.label, request.regions, request.force,
+                                             request.model))
         return {"results": [session.result_to_dict(r) for r in results]}
 
     @app.get("/api/history")
@@ -331,7 +339,8 @@ def create_app(session: WebSession) -> FastAPI:
     @app.post("/api/auto/start")
     def auto_start(request: AutoRequest | None = Body(None)) -> dict[str, Any]:
         scope: AutoScope = request.scope if request is not None else "video"
-        _call(lambda: session.start_auto(scope))
+        mode: AutoMode = request.mode if request is not None else "collect"
+        _call(lambda: session.start_auto(scope, mode))
         return asdict(session.auto_state())
 
     @app.post("/api/auto/stop")

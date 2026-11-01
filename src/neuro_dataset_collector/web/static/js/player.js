@@ -2,6 +2,50 @@
 // Кадр: открытое видео, воспроизведение, выбор зон, кнопки классов и ручное сохранение.
 
 const step = () => (state.config ? state.config.source.step : 1);
+const modelSet = () => !!(state.config && state.config.model.path);
+const modelOn = () => state.model && modelSet();
+
+// Цвета классов — те же, что рисует сервер на кадре (там BGR, здесь RGB).
+const CLASS_COLORS = ["#50c850", "#ff783c", "#28a0ff", "#dc50c8", "#dcdc28", "#a05aff", "#ff9696", "#a0c85a"];
+function classColor(label) {
+  if (!label) return "#969696";
+  const classes = (state.config && state.config.classes) || [];
+  const index = classes.includes(label) ? classes.indexOf(label) : [...label].reduce((a, c) => a + c.charCodeAt(0), 0);
+  return CLASS_COLORS[index % CLASS_COLORS.length];
+}
+
+// Ответы модели на кадре: включаются кнопкой «🧠 Модель» (или Alt+M), выбор запоминается в браузере.
+function updateModelChip() {
+  const chip = $("#model-chip");
+  if (!chip) return;
+  chip.disabled = !modelSet() || !(state.info && state.info.video);
+  chip.classList.toggle("on", modelOn());
+  chip.title = modelSet() ? "Показывать ответы модели на кадре (Alt+M)" : "Модель не задана: ⚙ → Автонарезка → Модель";
+  if (!modelOn()) $("#model-answers").hidden = true;
+}
+
+function toggleModel() {
+  if (!modelSet()) { toast("Модель не задана: ⚙ → Автонарезка → Модель", "bad"); return; }
+  state.model = !state.model;
+  try { localStorage.setItem("ndc.model", state.model ? "1" : "0"); } catch (error) { /* хранилище браузера недоступно */ }
+  updateModelChip();
+  showFrame(state.frame);
+}
+
+async function loadAnswers(index) {
+  if (!modelOn()) return;
+  try {
+    const data = await api("GET", `/api/model/answers/${index}`);
+    if (data.frame !== state.frame) return;
+    $("#model-answers").innerHTML = `<span class="muted">Модель:</span>` + data.answers.map((a) =>
+      `<span class="answer"><span class="swatch" style="background:${classColor(a.label)}"></span>${escapeHtml(a.zone)}: <b>${escapeHtml(a.label || "—")}</b>
+        ${a.conf !== null ? `<span class="muted">${a.conf.toFixed(2)}</span>` : ""}</span>`).join("");
+    $("#model-answers").hidden = false;
+  } catch (error) {
+    $("#model-answers").innerHTML = `<span class="bad">${escapeHtml(error.message)}</span>`;
+    $("#model-answers").hidden = false;
+  }
+}
 
 async function chooseRegions() {
   stopEdit();
@@ -55,6 +99,7 @@ async function applyVideo(info, frame) {
   $("#save-regions-as-menu").disabled = !useRegions;
   $("#dataset-chip").title = `Открыть папку датасета: ${info.dataset_dir || ""}`;
   $("#dataset-chip").disabled = !hasVideo;
+  updateModelChip();
   updateFrameTools();
   $("#frame-placeholder").style.display = hasVideo ? "none" : "";
   $("#frame").style.display = hasVideo && !autoRunning() ? "" : "none";
@@ -153,7 +198,8 @@ function showFrame(index) {
   state.loading = true;
   $("#seek").value = index;
   $("#frame-number").value = index;
-  $("#frame").src = `/api/video/frame/${index}?zones=${state.edit ? 0 : 1}&t=${Date.now()}`;
+  const model = modelOn() && !state.edit ? 1 : 0;
+  $("#frame").src = `/api/video/frame/${index}?zones=${state.edit ? 0 : 1}&model=${model}&t=${Date.now()}`;
   rememberPosition();
 }
 
@@ -165,6 +211,7 @@ function rememberPosition() {
 
 function onFrameLoaded() {
   state.loading = false;
+  if (modelOn() && !state.edit) loadAnswers(state.frame);
   if (!state.playing) return;
   const fps = state.info.fps || 25;
   const delay = Math.max(15, (1000 * step()) / fps / Number($("#speed").value));
@@ -173,7 +220,14 @@ function onFrameLoaded() {
 
 function onFrameError() {
   state.loading = false;
-  if (state.playing) { pause(); toast("Конец видео"); }
+  if (state.playing) { pause(); toast("Конец видео"); return; }
+  // Модель не загрузилась — показать кадр без неё и причину.
+  if (modelOn()) { state.model = false; updateModelChip(); showFrame(state.frame); loadAnswersError(); }
+}
+
+// Причина, почему кадр с ответами модели не показался (например, не установлен ultralytics).
+async function loadAnswersError() {
+  try { await api("GET", `/api/model/answers/${state.frame}`); } catch (error) { toast(error.message, "bad"); }
 }
 
 function play() {
@@ -193,7 +247,7 @@ async function saveCurrent(label, force, onlyRegions) {
   if (!state.info || !state.info.video) { toast("Сначала выберите видео", "bad"); return; }
   if (autoRunning()) { toast("Идёт автонарезка — дождитесь окончания или остановите её", "bad"); return; }
   try {
-    const data = await api("POST", "/api/save", { frame: state.frame, label, regions: onlyRegions || null, force });
+    const data = await api("POST", "/api/save", { frame: state.frame, label, regions: onlyRegions || null, force, model: modelOn() });
     data.results.forEach((r) => toast(r.message, r.ok ? "ok" : "bad"));
     loadCounts().then(renderPlaylist);
     loadGroup(state.info.video);
@@ -220,6 +274,7 @@ function onKey(event) {
   const big = event.shiftKey ? 10 : 1;
   if (state.edit) { editKey(event); return; }
   if (autoRunning()) return;
+  if (event.altKey && event.code === "KeyM") { event.preventDefault(); toggleModel(); return; }
   if (key === "PageDown") { event.preventDefault(); stepVideo(1); return; }
   if (key === "PageUp") { event.preventDefault(); stepVideo(-1); return; }
   if (key === " ") { event.preventDefault(); state.playing ? pause() : play(); return; }
@@ -238,6 +293,8 @@ function bindPlayer() {
   $("#regions-chip").onclick = (event) => { event.stopPropagation(); toggleRegionsMenu(); };
   document.addEventListener("click", (event) => { if (!event.target.closest(".menu")) closeRegionsMenu(); });
   $("#dataset-chip").onclick = () => state.info && state.info.video && openFolder(state.info.video);
+  $("#model-chip").onclick = toggleModel;
+  try { state.model = localStorage.getItem("ndc.model") === "1"; } catch (error) { state.model = false; }
   $("#zones").addEventListener("change", onZoneToggle);
   $("#frame").addEventListener("click", onFrameClick);
   $("#frame").addEventListener("load", onFrameLoaded);

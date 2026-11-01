@@ -2,22 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from conftest import random_image
+from conftest import write_video as _video
 from neuro_dataset_collector.config import CollectorConfig, JournalRunConfig
 from neuro_dataset_collector.core import Image, Prediction
 from neuro_dataset_collector.journal import read_journal, read_journal_meta
 from neuro_dataset_collector.pipeline import Collector, SaveRule, ZoneAnswer, predict_zones, run_model
-
-
-def _video(path: Path, frames: int = 10) -> Path:
-    cv2 = pytest.importorskip("cv2")
-    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 10.0, (64, 48))
-    for i in range(frames):
-        writer.write(random_image(i))
-    writer.release()
-    return path
 
 
 def _predictor(image: Image) -> list[Prediction]:

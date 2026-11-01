@@ -3,14 +3,19 @@
 
 const autoLoop = { timer: null, ticks: 0 };
 
+const MODE_TITLES = { collect: "Автонарезка", model: "Прогон моделью" };
+
 async function autoStart() {
   const scope = $("#auto-scope").value;
-  if (scope === "playlist" && !confirm(`Запустить автонарезку всех видео плейлиста (${state.playlist.items.length})?`)) return;
+  const mode = $("#auto-mode").value;
+  if (mode === "model" && !modelSet()) { toast("Модель не задана: ⚙ → Автонарезка → Модель", "bad"); return; }
+  const what = mode === "model" ? "прогон моделью" : "автонарезку";
+  if (scope === "playlist" && !confirm(`Запустить ${what} всех видео плейлиста (${state.playlist.items.length})?`)) return;
   if (scope === "video" && !(state.info && state.info.video)) { toast("Сначала откройте видео", "bad"); return; }
   if (state.edit) { toast("Сначала сохраните или отмените правку зон", "bad"); return; }
   try {
     pause();
-    await api("POST", "/api/auto/start", { scope });
+    await api("POST", "/api/auto/start", { scope, mode });
     pollAuto();
   } catch (error) {
     toast(error.message, "bad");
@@ -40,13 +45,16 @@ async function pollAuto() {
   const wasRunning = autoRunning();
   state.auto = s;
   const where = s.total > 1 ? `видео ${s.index} из ${s.total}: ${s.video}` : s.video;
-  const status = s.running ? `${where} · кадр ${s.frame} · сохранено ${s.saved}` : s.error ? `Ошибка: ${s.error}` : s.summary;
+  const done = s.mode === "model" ? `не прошли условия ${s.matched} · сохранено ${s.saved}` : `сохранено ${s.saved}`;
+  const status = s.running ? `${where} · кадр ${s.frame} · ${done}` : s.error ? `Ошибка: ${s.error}` : s.summary;
   $("#auto-status").textContent = status || "";
   $("#auto-status").title = status || "";
-  $("#auto-overlay").textContent = s.running ? `Автонарезка · ${where} · кадр ${s.frame} · сохранено ${s.saved}` : "";
+  $("#auto-overlay").textContent = s.running ? `${MODE_TITLES[s.mode] || ""} · ${where} · кадр ${s.frame} · ${done}` : "";
+  if (s.running) $("#auto-mode").value = s.mode;
   $("#auto-progress").style.width = `${Math.round((s.running ? autoProgress(s) : 0) * 100)}%`;
   $("#auto-start").disabled = s.running;
   $("#auto-scope").disabled = s.running;
+  $("#auto-mode").disabled = s.running;
   $("#auto-stop").disabled = !s.running;
   showAutoView(s.running);
   if (s.running) {
@@ -57,6 +65,7 @@ async function pollAuto() {
     return;
   }
   if (wasRunning) {
+    if (s.mode === "model" && typeof journalsChanged === "function") journalsChanged(s.journal);
     await refreshVideo();
     await loadPlaylist();
     historyStore.groups.forEach((_, video) => loadGroup(video));

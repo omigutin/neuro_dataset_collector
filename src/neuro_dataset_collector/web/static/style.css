@@ -145,8 +145,8 @@ input.invalid { border-color: var(--bad); background: color-mix(in srgb, var(--b
 .drawer label > textarea { display: block; width: 100%; margin-top: 3px; }
 .drawer label > input[type=range] { display: block; width: 100%; }
 textarea { width: 100%; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
-#model-options.disabled { opacity: .45; }
-#model-options.disabled * { pointer-events: none; }
+#model-options.disabled, #journal-options.disabled { opacity: .45; }
+#model-options.disabled *, #journal-options.disabled * { pointer-events: none; }
 fieldset.sequence { border: 1px solid var(--line); border-radius: 8px; margin: 10px 0; }
 fieldset.sequence legend label { margin: 0; font-weight: 600; }
 .sequence-demo .cells { display: flex; gap: 3px; margin: 6px 0; flex-wrap: wrap; }
@@ -188,3 +188,10 @@ dialog::backdrop { background: rgba(0,0,0,.3); }
   box-shadow: 0 4px 12px rgba(0,0,0,.15); }
 #toast div.ok { border-left-color: var(--ok); }
 #toast div.bad { border-left-color: var(--bad); }
+
+/* ---------- ответы модели ---------- */
+.chip.on { background: var(--soft); border-color: var(--accent); }
+.model-answers { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; font-size: 13px; }
+.answer { border: 1px solid var(--line); border-radius: 12px; padding: 1px 9px; background: var(--card); }
+.answer b { font-weight: 600; }
+.answer .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }

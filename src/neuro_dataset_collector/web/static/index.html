@@ -16,8 +16,12 @@
     <button id="save-config-as" class="icon" title="Сохранить настройки в файл…">💾</button>
   </div>
   <div class="auto-bar">
-    <button id="auto-start" class="primary" title="Автонарезка по правилам из настроек">▶ Автонарезка</button>
-    <select id="auto-scope" title="Что нарезать">
+    <select id="auto-mode" title="Что делать: автонарезка по правилам или прогон моделью с записью журнала ответов">
+      <option value="collect">Автонарезка</option>
+      <option value="model">Прогнать моделью</option>
+    </select>
+    <button id="auto-start" class="primary" title="Запустить">▶</button>
+    <select id="auto-scope" title="Какие видео">
       <option value="video">это видео</option>
       <option value="playlist">весь плейлист</option>
     </select>
@@ -67,6 +71,7 @@
             <button id="save-regions-as-menu">Сохранить разметку в файл…</button>
           </div>
         </div>
+        <button id="model-chip" class="chip" title="Показывать ответы модели на кадре">🧠 Модель</button>
         <button id="dataset-chip" class="chip" title="Открыть папку датасета этого видео">📂 Датасет</button>
       </div>
     </div>
@@ -108,6 +113,7 @@
     </div>
     <div id="video-info" class="muted"></div>
     <div id="zones" class="zones"></div>
+    <div id="model-answers" class="model-answers" hidden></div>
     <div class="class-bar">
       <div id="legend" class="legend"></div>
       <button id="edit-classes" class="icon" title="Классы и клавиши">✎</button>
@@ -220,6 +226,22 @@
       </div>
     </details>
 
+    <details open>
+      <summary>Прогон моделью</summary>
+      <p class="hint">«Прогнать моделью» в верхней строке: модель отвечает по каждой зоне проверяемых кадров
+        (шаг — «Проверять кадр моделью раз в … с»), ответы пишутся в журнал (папка «_journal» в датасете видео).
+        Журнал открывается во вкладке «Журнал» справа.</p>
+      <label class="check"><input type="checkbox" name="journal_save"> сохранять вырезы, где модель не прошла условия
+        <span class="hint">(на проверку — в «_suspect», папка по ответу модели)</span></label>
+      <div id="journal-options">
+        <label class="check"><input type="checkbox" name="journal_conf_on"> уверенность ниже
+          <input type="number" step="0.05" min="0" max="1" name="journal_conf_below" class="short"></label>
+        <label class="check"><input type="checkbox" name="journal_flips"> класс в зоне сменился по сравнению с прошлым кадром</label>
+        <div>ответ модели — один из классов:</div>
+        <div id="journal-labels" class="chips"></div>
+      </div>
+    </details>
+
     <details>
       <summary>Дополнительно</summary>
       <label>Имя файла <input name="filename"></label>
@@ -301,6 +323,7 @@
     <tr><td>клавиша класса</td><td>сохранить кадр в класс (Shift — даже если похож на сохранённый)</td></tr>
     <tr><td>клавиша «без класса»</td><td>сохранить в «_unsorted»</td></tr>
     <tr><td>щелчок по зоне на кадре</td><td>включить / выключить нарезку этой зоны</td></tr>
+    <tr><td><kbd>Alt</kbd>+<kbd>M</kbd></td><td>показать / скрыть ответы модели на кадре</td></tr>
     <tr><td><kbd>Esc</kbd></td><td>закрыть панель</td></tr>
   </table>
   <div class="row end"><button data-close-dialog>Закрыть</button></div>

@@ -44,6 +44,11 @@ function fillSettings(config) {
   set("cons_context", config.consistency.context);
   set("cons_max_run", config.consistency.max_run);
   renderReviewAlways(config.classes, config.consistency.review_always);
+  set("journal_save", config.journal.save);
+  set("journal_conf_on", config.journal.conf_below !== null);
+  set("journal_conf_below", config.journal.conf_below ?? 0.6);
+  set("journal_flips", config.journal.flips);
+  renderJournalLabels(config.classes, config.journal.labels);
   set("filename", config.storage.filename);
   set("collection", config.catalog.collection);
   set("dedup_scope", config.catalog.dedup_scope);
@@ -56,6 +61,12 @@ function renderReviewAlways(classes, selected) {
     || `<span class="muted">классов нет</span>`;
 }
 
+function renderJournalLabels(classes, selected) {
+  $("#journal-labels").innerHTML = classes.map((cls) =>
+    `<label class="check chip"><input type="checkbox" name="journal_labels" value="${escapeHtml(cls)}" ${selected.includes(cls) ? "checked" : ""}> ${escapeHtml(cls)}</label>`).join("")
+    || `<span class="muted">классов нет</span>`;
+}
+
 // Что зависит от других полей: своя папка, блок модели, схема последовательности.
 function updateSettingsView() {
   const own = field("where").value === "root";
@@ -63,6 +74,9 @@ function updateSettingsView() {
   field("root").closest(".row").querySelector("button").disabled = !own;
   const model = field("model_path").value.trim();
   $("#model-options").classList.toggle("disabled", !model);
+  $("#journal-options").classList.toggle("disabled", !field("journal_save").checked);
+  field("journal_conf_below").disabled = !field("journal_conf_on").checked;
+  updateModelChip();
   $("#model-hint").textContent = model
     ? "С моделью кадр сохраняется по её уверенности; класс подставляется из ответа модели."
     : "Без модели автонарезка берёт кадр раз в заданное время, без дублей; класс не известен — кадры попадают в «_unsorted».";
@@ -125,6 +139,10 @@ function collectSettings() {
   c.consistency.context = n("cons_context") || 5;
   c.consistency.max_run = n("cons_max_run") || 2;
   c.consistency.review_always = $$("#review-always input:checked").map((el) => el.value);
+  c.journal.save = on("journal_save");
+  c.journal.conf_below = on("journal_conf_on") ? Math.min(1, Math.max(0, n("journal_conf_below"))) : null;
+  c.journal.flips = on("journal_flips");
+  c.journal.labels = $$("#journal-labels input:checked").map((el) => el.value);
   return c;
 }
 

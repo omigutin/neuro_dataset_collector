@@ -128,11 +128,13 @@ def run_model(
     stop: threading.Event | None = None,
     on_frame: Callable[[Frame, list[ZoneAnswer]], None] | None = None,
     on_result: Callable[[SaveResult], None] | None = None,
+    on_match: Callable[[Frame, ZoneAnswer, str], None] | None = None,
 ) -> ModelRunReport:
     """
         Прогоняет видео моделью и пишет журнал (base — общая часть имени файлов журнала,
         по умолчанию в папке датасета). Шаг — как у автонарезки с моделью.
         Если в настройках journal.save — вырезы, не прошедшие условия, сохраняются на проверку («_suspect»).
+        on_match — ответ модели, не прошедший условия, и причина.
     """
     config = collector.config
     rule = SaveRule(config.journal)
@@ -166,6 +168,8 @@ def run_model(
                     if reason is None:
                         continue
                     report.matched += 1
+                    if on_match is not None:
+                        on_match(frame, answer, reason)
                     if not save:
                         continue
                     for result in collector.flag(frame, list(answer.predictions), region=by_id.get(answer.zone),

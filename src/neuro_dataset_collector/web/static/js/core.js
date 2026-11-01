@@ -15,6 +15,7 @@ const state = {
   counts: {},          // сохранено в открытом видео: класс → число
   auto: null,          // ход автонарезки (ответ /api/auto/status)
   edit: null,          // правка зон: { regions: [{id, shape, points}], active, vertex, drag, history }
+  model: false,        // показывать ответы модели на кадре
 };
 
 async function api(method, url, body) {

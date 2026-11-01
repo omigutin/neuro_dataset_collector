@@ -95,10 +95,12 @@ function historyItem(group, item, index, currentFrame) {
   const moves = group.task === "classify"
     ? group.classes.filter((c) => c !== item.label).map((c) => `<button data-act="relabel" data-label="${escapeHtml(c)}">→ ${escapeHtml(c)}</button>`).join("") : "";
   const status = item.status === "verified" ? " ✓" : item.status === "suspect" ? " ⚠" : "";
+  const model = item.model_label && item.model_label !== item.label
+    ? `<div class="muted">модель: ${escapeHtml(item.model_label)}${item.confidence != null ? ` ${Number(item.confidence).toFixed(2)}` : ""}</div>` : "";
   return `<div class="h-item${here}" data-index="${index}">
     <div class="h-thumbs"><a href="${url}" target="_blank"><img src="${url}" loading="lazy" alt=""></a></div>
     <div><div class="h-title">${escapeHtml(item.label || (group.task === "classify" ? "без класса" : "кадр"))}${status}</div>
-      <div class="muted">${where}</div>
+      <div class="muted">${where}</div>${model}
       <div class="h-actions">${moves}<button data-act="delete" class="del" title="В корзину">🗑</button></div></div></div>`;
 }
 

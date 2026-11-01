@@ -102,4 +102,6 @@ def sample_item(record: SampleRecord, path: str) -> dict[str, Any]:
         "region": record.region_id,
         "frame": record.frame_index,
         "path": path,
+        "model_label": record.model_label,
+        "confidence": record.confidence,
     }
