@@ -35,6 +35,7 @@ from ..regions.providers import (
     write_labelme,
 )
 from ..review.manual import reject_sample, relabel_sample, sample_files
+from ..review.model_check import ModelCheckReport, check_with_model, cross_label_duplicates
 from ..review.sync import sync_collection
 from ..sources.video import VideoReader, list_videos
 from ..storage.layout import IMAGES_DIR, SUSPECT_DIR
@@ -43,7 +44,7 @@ from .journal_view import JournalService
 from .model_view import ModelView
 from .state import SessionState, default_config_path, load_state, save_state
 
-__all__ = ["AutoMode", "AutoRunState", "AutoScope", "WebSession"]
+__all__ = ["AutoMode", "AutoRunState", "AutoScope", "CheckState", "WebSession"]
 
 # Сколько последних позиций в видео помнить между запусками.
 _MAX_POSITIONS = 500
@@ -81,6 +82,20 @@ class AutoRunState:
 
 
 @dataclass
+class CheckState:
+    """ Ход и итог проверки датасета моделью. """
+
+    running: bool = False
+    scope: str = "video"
+    done: int = 0
+    total: int = 0
+    summary: str = ""
+    error: str = ""
+    disagreements: list[dict[str, Any]] = field(default_factory=list)
+    duplicates: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
 class WebSession:
     """
         Одно рабочее место: файл настроек, папка с видео (плейлист) и одно открытое видео.
@@ -112,6 +127,9 @@ class WebSession:
     _auto_answers: list[ZoneAnswer] = field(default_factory=list)
     _model: ModelView = field(default_factory=ModelView)
     _journals: JournalService = field(default_factory=JournalService)
+    _check: CheckState = field(default_factory=CheckState)
+    _check_stop: threading.Event = field(default_factory=threading.Event)
+    _check_thread: threading.Thread | None = None
 
     # ---- запуск и сеанс -----------------------------------------------------------------------------
 
@@ -644,6 +662,8 @@ class WebSession:
         with self._lock:
             if self._auto.running:
                 return
+            if self._check.running:
+                raise RuntimeError("Wait for the dataset check to finish")
             if scope == "playlist":
                 videos = self.playlist_videos()
                 if not videos:
@@ -910,6 +930,71 @@ class WebSession:
                     self._release_catalog(config.catalog.root)
         return total
 
+    def start_check(self, scope: AutoScope = "video", min_conf: float = 0.0, threshold: int = 3) -> None:
+        """
+            Проверка датасета моделью в фоне: где модель не согласна с классом кадра (или уверена меньше min_conf)
+            и почти одинаковые кадры в разных классах (отличие отпечатков не больше threshold).
+        """
+        with self._lock:
+            if self._check.running:
+                return
+            if self._auto.running:
+                raise RuntimeError("Stop automatic collection before checking the dataset")
+            configs = self._collections(scope)
+            if not configs:
+                raise FileNotFoundError("No saved frames to check")
+            predictor = self._model.predictor(self.config)
+            source = self.video.stem if scope == "video" and self.video is not None else None
+            self._check = CheckState(running=True, scope=scope)
+            self._check_stop.clear()
+
+        def worker() -> None:
+            total = ModelCheckReport()
+            try:
+                for config in configs:
+                    video = str(config.source.path or "")
+                    catalog = self._acquire_catalog(config.catalog.root)
+                    try:
+                        def progress(done: int, count: int) -> None:
+                            self._check.done, self._check.total = done, count
+
+                        report = check_with_model(config, catalog, predictor, min_conf=min_conf, source=source,
+                                                  stop=self._check_stop, on_progress=progress)
+                        for pair in cross_label_duplicates(config, catalog, threshold, source=source):
+                            self._check.duplicates.append({"video": video, "distance": pair.distance, "items": [
+                                {"id": r.id, "label": r.label, "path": str(catalog.absolute(r)), "source": r.source,
+                                 "frame": r.frame_index, "region": r.region_id} for r in (pair.first, pair.second)]})
+                    finally:
+                        self._release_catalog(config.catalog.root)
+                    total.checked += report.checked
+                    total.agreed += report.agreed
+                    total.failed += report.failed
+                    self._check.disagreements.extend(
+                        {"id": d.sample_id, "video": video, "path": str(d.path), "label": d.label,
+                         "model_label": d.model_label, "conf": d.conf, "status": d.status, "source": d.source,
+                         "frame": d.frame, "region": d.region} for d in report.disagreements)
+                    total.disagreements.extend(report.disagreements)
+                    if self._check_stop.is_set():
+                        break
+            except Exception as error:  # Ошибка показывается в интерфейсе, поток не должен падать молча.
+                self._check.error = str(error)
+            finally:
+                self._check.summary = total.summary() + f", похожих пар в разных классах: {len(self._check.duplicates)}"
+                self._check.running = False
+
+        self._check_thread = threading.Thread(target=worker, name="ndc-check", daemon=True)
+        self._check_thread.start()
+
+    def check_state(self) -> CheckState:
+        """ Ход и итог проверки датасета моделью. """
+        return self._check
+
+    def stop_check(self) -> None:
+        """ Останавливает проверку датасета моделью. """
+        self._check_stop.set()
+        if self._check_thread is not None:
+            self._check_thread.join(timeout=30)
+
     def stats(self, scope: AutoScope = "video") -> dict[str, Any]:
         """ Сколько собрано: по видео (классы и состояния) и итог. """
         rows: list[dict[str, Any]] = []
@@ -1027,6 +1112,7 @@ class WebSession:
     def close(self) -> None:
         """ Освобождает ресурсы. """
         self.stop_auto()
+        self.stop_check()
         self._model.close()
         self._journals.close()
         with self._lock:

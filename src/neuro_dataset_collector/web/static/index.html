@@ -331,6 +331,18 @@
     <button id="export" class="primary">Выгрузить</button>
     <pre id="export-result"></pre>
   </section>
+  <section class="step">
+    <h3>4. Проверка моделью</h3>
+    <p class="hint">Модель из настроек проверяет уже собранные кадры: где она не согласна с классом кадра (или не уверена)
+      и какие почти одинаковые кадры лежат в разных классах. Кадры «без класса» не проверяются.</p>
+    <div class="row">
+      <label class="check">не уверена, если ниже <input id="check-conf" type="number" step="0.05" min="0" max="1" value="0.5" class="short"></label>
+      <button id="check-start" class="primary">Проверить</button>
+      <button id="check-stop" class="icon" title="Остановить" disabled>■</button>
+    </div>
+    <div id="check-status" class="muted"></div>
+    <div id="check-results"></div>
+  </section>
 </aside>
 
 <!-- ============ Классы и клавиши ============ -->

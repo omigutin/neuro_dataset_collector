@@ -82,3 +82,20 @@ def test_model_run_writes_journal_and_saves(with_model: Any) -> None:
     rows = list(read_journal(Path(status["journal"])))
     assert len(rows) == 2 * status["frames"] and status["saved"] == len(rows)
     assert Path(status["journal"]).parent.name == "_journal"
+
+
+def test_dataset_check_with_model(with_model: Any) -> None:
+    client = with_model
+    for frame in (1, 3, 5):
+        client.post("/api/save", json={"frame": frame, "label": "EMPTY", "regions": ["1"]})
+    assert client.post("/api/check/start", json={"scope": "video", "min_conf": 0.9}).status_code == 200
+    for _ in range(100):
+        status = client.get("/api/check/status").json()
+        if not status["running"]:
+            break
+        time.sleep(0.05)
+    assert status["error"] == "" and status["total"] == 3
+    # Модель уверена на 0.55 — меньше 0.9: все три кадра в списке на проверку.
+    assert len(status["disagreements"]) == 3 and "Проверено кадров: 3" in status["summary"]
+    item = status["disagreements"][0]
+    assert client.get("/api/file", params={"path": item["path"], "video": item["video"]}).status_code == 200

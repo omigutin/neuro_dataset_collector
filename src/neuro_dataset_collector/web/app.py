@@ -120,6 +120,14 @@ class ZoneSaveRequest(BaseModel):
     force: bool = False
 
 
+class CheckRequest(BaseModel):
+    """ Проверка датасета моделью. """
+
+    scope: AutoScope = "video"
+    min_conf: float = 0.0
+    threshold: int = 3
+
+
 class ExportRequest(BaseModel):
     """ Запрос выгрузки. """
 
@@ -433,6 +441,20 @@ def create_app(session: WebSession) -> FastAPI:
     @app.get("/api/auto/status")
     def auto_status() -> dict[str, Any]:
         return asdict(session.auto_state())
+
+    @app.post("/api/check/start")
+    def check_start(request: CheckRequest) -> dict[str, Any]:
+        _call(lambda: session.start_check(request.scope, request.min_conf, request.threshold))
+        return asdict(session.check_state())
+
+    @app.post("/api/check/stop")
+    def check_stop() -> dict[str, Any]:
+        session.stop_check()
+        return asdict(session.check_state())
+
+    @app.get("/api/check/status")
+    def check_status() -> dict[str, Any]:
+        return asdict(session.check_state())
 
     @app.get("/api/stats")
     def stats(scope: AutoScope = Query("video")) -> dict[str, Any]:
