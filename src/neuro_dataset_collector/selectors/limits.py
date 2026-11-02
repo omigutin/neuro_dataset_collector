@@ -4,18 +4,26 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Protocol
 
 import numpy as np
 import numpy.typing as npt
 
-from ..catalog.catalog import Catalog
+from ..catalog.catalog import Catalog, SampleRecord
 from ..config.models import DedupLimit, IntervalLimit, LabelOverride, Limit, QuotaLimit, SceneChangeLimit
 from ..core.results import RejectReason
+from ..core.types import SampleStatus
 from ..imaging.hashing import mean_abs_diff
 from .base import Candidate, Rejection
 
 __all__ = ["DedupRule", "LimitRule", "build_limits", "check_limits", "commit_limits"]
+
+# Сколько похожих записей с удалёнными файлами пропустить за одну проверку.
+_MISSING_LIMIT = 50
+# Запись моложе этого может ещё дописываться в фоне — её файл не проверяется.
+_FRESH_RECORD = timedelta(minutes=2)
 
 
 class LimitRule(Protocol):
@@ -80,18 +88,40 @@ class DedupRule:
         self._collection = collection
 
     def check(self, candidate: Candidate) -> Rejection | None:
-        found = self._catalog.find_similar(candidate.hash, self._threshold, self._collection)
-        if found is None:
-            return None
-        record, distance = found
-        path = self._catalog.absolute(record)
-        state = "отклонённый ранее" if record.status.value == "rejected" else "уже сохранённый"
-        return Rejection(
-            RejectReason.DUPLICATE,
-            f"Похож на {state} кадр (отличие {distance} из 64): {record.path}",
-            similar_to=path,
-            distance=distance,
-        )
+        for _ in range(_MISSING_LIMIT):
+            found = self._catalog.find_similar(candidate.hash, self._threshold, self._collection)
+            if found is None:
+                return None
+            record, distance = found
+            path = self._catalog.absolute(record)
+            if self._forget_if_missing(record, path):
+                continue
+            state = "отклонённый ранее" if record.status.value == "rejected" else "уже сохранённый"
+            return Rejection(
+                RejectReason.DUPLICATE,
+                f"Похож на {state} кадр (отличие {distance} из 64): {record.path}",
+                similar_to=path,
+                distance=distance,
+            )
+        return None
+
+    def _forget_if_missing(self, record: SampleRecord, path: Path) -> bool:
+        """
+            Непроверенный кадр, файл которого удалён с диска (например, удалили папку, чтобы начать заново),
+            не мешает сохранять похожие: запись помечается сбойной и уходит из поиска дублей.
+            Проверенные и отклонённые человеком кадры не трогаются. Свежие записи не трогаются:
+            их файл может ещё дописываться в фоне.
+        """
+        if record.status not in (SampleStatus.PENDING, SampleStatus.SUSPECT) or record.id is None or path.exists():
+            return False
+        try:
+            age = datetime.now(timezone.utc) - datetime.fromisoformat(record.created_at)
+        except ValueError:
+            return False
+        if age < _FRESH_RECORD:
+            return False
+        self._catalog.update(record.id, origin="file_missing", status=SampleStatus.FAILED)
+        return True
 
     def commit(self, candidate: Candidate) -> None:
         # Отпечаток попадает в индекс при добавлении записи в каталог.

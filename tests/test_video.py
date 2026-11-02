@@ -51,3 +51,28 @@ def test_variable_rate_video_frames_are_exact(variable_rate_video: Path, tmp_pat
         assert sampled[-1].timestamp is not None and 5.0 < sampled[-1].timestamp < 6.2
     assert len(list((tmp_path / "index").glob("*.json"))) == 1
 
+
+
+def test_missing_files_of_unreviewed_frames_do_not_block_new_ones(tmp_path: Path) -> None:
+    from datetime import datetime, timedelta
+
+    from conftest import make_frame
+    from neuro_dataset_collector import Collector, CollectorConfig
+    from neuro_dataset_collector.catalog import Catalog
+
+    config = CollectorConfig.model_validate({
+        "classes": ["EMPTY"], "catalog": {"root": str(tmp_path / "data")},
+        "auto": {"triggers": [{"type": "always"}], "limits": [{"type": "dedup", "threshold": 0}]},
+        "runtime": {"async_write": False}, "storage": {"min_free_gb": 0},
+    })
+    with Collector(config) as collector:
+        assert collector.offer(make_frame(1))[0].ok
+        assert not collector.offer(make_frame(1, index=5))[0].ok          # дубль
+    shutil.rmtree(tmp_path / "data" / "_unsorted")                          # папку удалили, чтобы начать заново
+    with Catalog(tmp_path / "data") as catalog:
+        old = (datetime.now().astimezone() - timedelta(hours=1)).isoformat(timespec="seconds")
+        catalog._conn.execute("UPDATE samples SET created_at = ?", (old,))
+        catalog._conn.commit()
+    with Collector(config) as collector:
+        result = collector.offer(make_frame(1, index=9))[0]
+        assert result.ok, result.message
