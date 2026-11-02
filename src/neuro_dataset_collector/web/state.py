@@ -35,6 +35,8 @@ class SessionState(BaseModel):
 
     config_path: str | None = None
     playlist_dir: str | None = None
+    # Искать видео и в подпапках папки плейлиста.
+    playlist_recursive: bool = True
     video: str | None = None
     frame: int = 0
     # Последний кадр каждого видео: при возврате к видео продолжаем с того же места.

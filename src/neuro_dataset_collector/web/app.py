@@ -294,8 +294,8 @@ def create_app(session: WebSession) -> FastAPI:
         return result
 
     @app.post("/api/playlist")
-    def set_playlist(path: str | None = Body(None, embed=True)) -> dict[str, Any]:
-        result: dict[str, Any] = _call(lambda: session.set_playlist(Path(path) if path else None))
+    def set_playlist(path: str | None = Body(None), recursive: bool | None = Body(None)) -> dict[str, Any]:
+        result: dict[str, Any] = _call(lambda: session.set_playlist(Path(path) if path else None, recursive))
         return result
 
     @app.post("/api/video/zones")

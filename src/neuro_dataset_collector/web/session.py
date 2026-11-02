@@ -103,6 +103,7 @@ class WebSession:
     config_path: Path
     config: CollectorConfig = field(default_factory=CollectorConfig)
     playlist_dir: Path | None = None
+    playlist_recursive: bool = True
     video: Path | None = None
     frame: int = 0
     _positions: dict[str, int] = field(default_factory=dict)
@@ -156,6 +157,7 @@ class WebSession:
         session._markup_choices = dict(state.markup)
         if state.playlist_dir and Path(state.playlist_dir).is_dir():
             session.playlist_dir = Path(state.playlist_dir)
+        session.playlist_recursive = state.playlist_recursive
         same_config = config_path is None or state.config_path == str(session.config_path)
         if same_config and state.video and Path(state.video).is_file():
             session.video, session.frame = Path(state.video), max(0, state.frame)
@@ -172,6 +174,7 @@ class WebSession:
         save_state(SessionState(
             config_path=str(self.config_path),
             playlist_dir=str(self.playlist_dir) if self.playlist_dir else None,
+            playlist_recursive=self.playlist_recursive,
             video=str(self.video) if self.video else None,
             frame=self.frame,
             positions=dict(self._positions),
@@ -886,20 +889,22 @@ class WebSession:
 
     # ---- плейлист ------------------------------------------------------------------------------------
 
-    def set_playlist(self, folder: Path | None) -> dict[str, Any]:
-        """ Задаёт папку с видео (None — убрать плейлист). """
+    def set_playlist(self, folder: Path | None, recursive: bool | None = None) -> dict[str, Any]:
+        """ Задаёт папку с видео (None — убрать плейлист) и искать ли видео в подпапках (None — не менять). """
         if folder is not None and not folder.is_dir():
             raise FileNotFoundError(f"Folder not found: {folder}")
         with self._lock:
             self.playlist_dir = folder.resolve() if folder is not None else None
+            if recursive is not None:
+                self.playlist_recursive = recursive
             self._save_state()
         return self.playlist()
 
     def playlist_videos(self) -> list[Path]:
-        """ Видео папки плейлиста и её подпапок (без папок датасетов «…_dataset»). """
+        """ Видео папки плейлиста и, если включено, её подпапок (без папок датасетов «…_dataset»). """
         if self.playlist_dir is None or not self.playlist_dir.is_dir():
             return []
-        videos = list_videos(self.playlist_dir, self.config.source.extensions, recursive=True)
+        videos = list_videos(self.playlist_dir, self.config.source.extensions, recursive=self.playlist_recursive)
         return [v for v in videos if not any(part.endswith(DATASET_DIR_SUFFIX)
                                              for part in v.relative_to(self.playlist_dir).parts[:-1])]
 
@@ -919,7 +924,7 @@ class WebSession:
                 "regions": self._markup_tag(video),
             })
         return {"dir": str(self.playlist_dir) if self.playlist_dir else None, "items": items,
-                "current": str(self.video) if self.video else None}
+                "recursive": self.playlist_recursive, "current": str(self.video) if self.video else None}
 
     def _markup_tag(self, video: Path) -> str | None:
         """ Чем будет размечено видео в плейлисте: sidecar, production, file; None — разметки нет. """

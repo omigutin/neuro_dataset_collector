@@ -376,3 +376,18 @@ def test_mounted_into_another_app(home: Path) -> None:
             assert test_client.get("/dataset/api/ping").json()["app"] == "neuro_dataset_collector"
     finally:
         session.close()
+
+
+def test_playlist_without_subfolders_is_remembered(client: TestClient, workspace: Path, home: Path) -> None:
+    folder = workspace / "videos"
+    (folder / "day2").mkdir(parents=True)
+    _video(folder / "ml_cam25_a.avi", frames=4)
+    _video(folder / "day2" / "ml_cam25_b.avi", frames=4)
+    data = client.post("/api/playlist", json={"path": str(folder), "recursive": False}).json()
+    assert data["recursive"] is False and [item["name"] for item in data["items"]] == ["ml_cam25_a.avi"]
+    assert load_state().playlist_recursive is False
+    # Без recursive — прежний выбор остаётся.
+    data = client.post("/api/playlist", json={"path": str(folder)}).json()
+    assert data["recursive"] is False and len(data["items"]) == 1
+    data = client.post("/api/playlist", json={"path": str(folder), "recursive": True}).json()
+    assert data["recursive"] is True and len(data["items"]) == 2
