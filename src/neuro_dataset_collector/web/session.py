@@ -36,10 +36,12 @@ from ..storage.layout import IMAGES_DIR, SUSPECT_DIR
 from .history import RejectionLog, sample_item
 from .journal_view import JournalService
 from .model_view import ModelView
-from .state import SessionState, VideoMarkup, default_config_path, load_state, save_state
+from .state import SessionState, VideoMarkup, app_dir, default_config_path, load_state, save_state
 
 __all__ = ["AutoMode", "AutoRunState", "AutoScope", "CheckState", "WebSession"]
 
+# Папка кэша времени кадров видео с переменной частотой (в папке программы).
+_VIDEO_INDEX_DIR = "video_index"
 # Сколько последних позиций в видео помнить между запусками.
 _MAX_POSITIONS = 500
 _IMAGE_EXT = frozenset({".jpg", ".jpeg", ".png", ".bmp", ".webp"})
@@ -142,6 +144,8 @@ class WebSession:
             Видео и кадр прошлого сеанса восстанавливаются, если файл видео на месте.
         """
         state = load_state()
+        # Время кадров видео с переменной частотой кадров — в папке программы, чтобы не просматривать их заново.
+        VideoReader.index_dir = app_dir() / _VIDEO_INDEX_DIR
         path = config_path or (Path(state.config_path) if state.config_path else default_config_path())
         session = cls(config_path=path.resolve())
         if session.config_path.exists():
