@@ -20,9 +20,12 @@ catalog:
 # Зоны, которые вырезаются из кадра.
 regions:
   source: none                   # none — весь кадр; file — из файла разметки LabelMe; api — передаёт программа
-  file: null                     # путь к файлу LabelMe (для source: file)
+  variant: auto                  # какую разметку брать (source: file): auto — рядом с видео, иначе боевая, иначе file;
+                                 # sidecar — только рядом с видео; production — только боевая; file — только file
+  version: null                  # версия разметки рядом с видео; null — текущая
+  file: null                     # явный файл LabelMe (обязателен для variant: file)
   labels: []                     # какие фигуры брать по метке, например [CROP] (регистр не важен); пусто — все
-  search_dir: null               # папка с файлами разметки: для видео «…cam25…» предлагается «…cam25….json»
+  search_dir: null               # папка боевой разметки: файл подбирается по имени и пути видео (…cam25… → …cam25….json)
   where: {}                      # дополнительный отбор по полям фигуры, например {position: left}
   id_field: null                 # поле фигуры, которое станет номером зоны, например wz
   mask_outside: false            # закрасить чёрным всё вне многоугольника
