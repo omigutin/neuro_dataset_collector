@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Protocol
 
 from ..config.models import RegionsConfig, RegionSource
 from ..core.types import AttrValue, Point, Region
@@ -17,20 +15,9 @@ __all__ = [
     "FullFrameRegions",
     "LabelMeRegions",
     "RegionProvider",
-    "RegionsOrigin",
-    "ShapeKind",
     "StaticRegions",
     "create_region_provider",
-    "find_regions_file",
-    "sidecar_regions_file",
-    "suggest_regions_file",
-    "write_labelme",
 ]
-
-# Откуда взят файл разметки видео: рядом с видео или из папки разметки по номеру камеры.
-RegionsOrigin = Literal["video", "camera"]
-# Тип фигуры зоны в файле разметки.
-ShapeKind = Literal["rectangle", "polygon"]
 
 _log = logging.getLogger("neuro_dataset_collector")
 
@@ -185,43 +172,6 @@ class LabelMeRegions:
         shape_type = str(shape.get("shape_type", "polygon"))
         return shape_type == "rectangle" or (shape_type == "polygon" and isinstance(points, list) and len(points) == 2)
 
-    def edited(
-        self,
-        edits: Mapping[str, Sequence[Point]],
-        width: int,
-        height: int,
-        shapes: Mapping[str, ShapeKind] | None = None,
-    ) -> dict[str, Any]:
-        """
-            Содержимое файла разметки с исправленными зонами.
-            edits — новые контуры зон в координатах кадра width × height; остальные фигуры не меняются.
-            shapes — новый тип фигуры зоны ('polygon' — прямоугольник стал многоугольником);
-            без него тип прежний: прямоугольник записывается двумя углами.
-        """
-        data: dict[str, Any] = json.loads(json.dumps(self._data))
-        image_w, image_h = self._image_size or (width, height)
-        sx, sy = image_w / width, image_h / height
-        for region_id, points in edits.items():
-            index = self._shape_index.get(region_id)
-            if index is None:
-                raise ValueError(f"Unknown region: {region_id}")
-            scaled = [(min(max(float(x) * sx, 0.0), image_w), min(max(float(y) * sy, 0.0), image_h))
-                      for x, y in points]
-            shape = data["shapes"][index]
-            kind = (shapes or {}).get(region_id) or ("rectangle" if self._is_rectangle(shape) else "polygon")
-            if kind == "rectangle":
-                xs, ys = [x for x, _ in scaled], [y for _, y in scaled]
-                if not xs or max(xs) <= min(xs) or max(ys) <= min(ys):
-                    raise ValueError(f"Region {region_id} has zero area")
-                shape["points"] = [[min(xs), min(ys)], [max(xs), max(ys)]]
-                shape["shape_type"] = "rectangle"
-            else:
-                if len(scaled) < 3:
-                    raise ValueError(f"Region {region_id} must have at least 3 points")
-                shape["points"] = [[x, y] for x, y in scaled]
-                shape["shape_type"] = "polygon"
-        return data
-
 
 def create_region_provider(config: RegionsConfig, api_regions: Sequence[Region] | None = None) -> RegionProvider:
     """ Создаёт поставщика зон по настройкам. """
@@ -235,45 +185,3 @@ def create_region_provider(config: RegionsConfig, api_regions: Sequence[Region] 
             return FullFrameRegions()
         raise FileNotFoundError(f"Regions file not found: {config.file}")
     return LabelMeRegions(config.file, config.labels, config.where, config.id_field, config.ids)
-
-
-def write_labelme(data: Mapping[str, Any], path: Path) -> None:
-    """ Записывает файл разметки LabelMe (через временный файл, чтобы не оставить его испорченным). """
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(f".{path.name}.tmp")
-    temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temp, path)
-
-
-def sidecar_regions_file(video: Path) -> Path:
-    """ Файл разметки рядом с видео: то же имя, расширение .json. """
-    return Path(video).with_suffix(".json")
-
-
-def find_regions_file(video: Path, search_dir: Path | None) -> tuple[Path, RegionsOrigin] | None:
-    """
-        Файл разметки для видео: сначала json рядом с видео (с тем же именем),
-        затем файл с тем же номером камеры из папки разметки.
-    """
-    sidecar = sidecar_regions_file(video)
-    if sidecar.is_file():
-        return sidecar, "video"
-    if search_dir is not None:
-        suggestion = suggest_regions_file(video, search_dir)
-        if suggestion is not None:
-            return suggestion, "camera"
-    return None
-
-
-def suggest_regions_file(video: Path, search_dir: Path) -> Path | None:
-    """
-        Подсказка файла разметки для видео: json из search_dir, в имени которого тот же номер камеры
-        (часть «cam<N>» в имени видео). None — если номера нет или подходящих файлов не ровно один.
-    """
-    match = re.search(r"cam(\d+)", video.stem, re.IGNORECASE)
-    if match is None or not search_dir.is_dir():
-        return None
-    pattern = re.compile(rf"(^|[^0-9a-z])cam0*{int(match.group(1))}([^0-9]|$)", re.IGNORECASE)
-    found = [path for path in sorted(search_dir.glob("*.json")) if pattern.search(path.stem)]
-    return found[0] if len(found) == 1 else None

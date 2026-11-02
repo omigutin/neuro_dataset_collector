@@ -6,6 +6,7 @@
   <title>Сборщик датасета</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="static/style.css?v={{version}}">
+  <link rel="stylesheet" href="markup/static/neuro_markup_lab.css?v={{version}}">
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -39,9 +40,17 @@
     <div class="menu">
       <button id="regions-chip" class="status-chip" type="button" title="Откуда берутся зоны"><span class="dot"></span><span class="txt">Разметка: —</span></button>
       <div id="regions-menu" class="menu-list" hidden>
-        <button id="pick-regions" type="button">Выбрать файл разметки…</button>
+        <div class="menu-head">Разметка видео</div>
+        <button type="button" data-markup="auto">Авто: рядом с видео, иначе боевая</button>
+        <button type="button" data-markup="sidecar">Рядом с видео</button>
+        <button type="button" data-markup="production">Боевая</button>
+        <button type="button" data-markup="file">Явный файл</button>
+        <label id="markup-version-row" class="menu-row">Версия рядом с видео
+          <select id="markup-version"></select></label>
+        <hr>
+        <button id="open-markup-editor" type="button">Открыть редактор разметки</button>
+        <button id="pick-regions" type="button">Открыть файл разметки…</button>
         <button id="no-regions" type="button">Резать весь кадр (без зон)</button>
-        <button id="save-regions-as-menu" type="button">Сохранить разметку в файл…</button>
       </div>
     </div>
     <button id="model-chip" class="status-chip" type="button"><span class="dot"></span><span class="txt">Модель: не выбрана</span></button>
@@ -125,20 +134,14 @@
         <div class="segmented" role="group" aria-label="Что показывать на кадре">
           <button id="show-zones" type="button" class="active" aria-pressed="true">Зоны</button>
           <button id="show-model" type="button" aria-pressed="false" title="Ответы модели на кадре (Alt+M)">Ответы модели</button>
-          <button id="edit-toggle" type="button" aria-pressed="false">Править зоны</button>
         </div>
+        <button id="edit-markup" class="btn small" type="button" title="Редактор разметки: правка зон, версии рядом с видео, боевая"><svg class="ic"><use href="#i-edit"/></svg>Редактор разметки</button>
       </div>
       <div id="regions-warning" class="warning" hidden></div>
       <div class="frame-wrap">
         <img id="frame" alt="">
         <img id="auto-frame" alt="" hidden>
         <div id="auto-overlay" class="auto-overlay" hidden></div>
-        <canvas id="editor" hidden></canvas>
-        <div id="frame-tools" class="frame-tools" hidden>
-          <button id="edit-undo" type="button" class="btn small" title="Отменить (Ctrl+Z)"><svg class="ic"><use href="#i-undo"/></svg>Отменить</button>
-          <button id="edit-cancel" type="button" class="btn small" title="Выйти без сохранения (Esc)"><svg class="ic"><use href="#i-x"/></svg>Не сохранять</button>
-          <button id="save-regions-as" type="button" class="btn small" title="Сохранить разметку в файл, например перезаписать файл камеры"><svg class="ic"><use href="#i-save"/></svg>В файл камеры…</button>
-        </div>
         <div id="frame-badge" class="frame-badge" hidden></div>
       </div>
       <div id="frame-placeholder" class="placeholder">
@@ -148,11 +151,6 @@
           <button class="btn primary" type="button" data-pick-folder><svg class="ic"><use href="#i-folder"/></svg>Папка с видео…</button>
           <button class="btn" type="button" data-pick-video><svg class="ic"><use href="#i-film"/></svg>Одно видео…</button>
         </div>
-      </div>
-      <div id="edit-bar" class="edit-bar" hidden>
-        <b>Правка зон.</b> Тяните за точки и стороны, за середину — перенос. «+» на стороне или двойной щелчок по стороне —
-        новая точка; двойной щелчок по точке или Delete — удалить точку; стрелки — сдвиг (Shift — на 10); Tab — следующая зона.
-        «Сохранить зоны» или Enter — сохранить рядом с видео, «Не сохранять» или Esc — выйти без сохранения.
       </div>
       <div class="controls">
         <button id="prev" class="btn icon-only" type="button" aria-label="Шаг назад" title="Шаг назад (←)"><svg class="ic"><use href="#i-prev"/></svg></button>
@@ -377,8 +375,18 @@
       <label>Папка с файлами разметки камер
         <span class="row"><input name="regions_search_dir"><button class="btn" type="button" data-pick="dir" data-target="regions_search_dir">Выбрать…</button></span>
       </label>
-      <p class="hint">Для видео «…cam25…» берётся «…cam25….json» из этой папки, если рядом с видео нет своего json.
-        Какие зоны резать, выбирается под кадром и запоминается для каждой камеры.</p>
+      <label>Какую разметку брать
+        <select name="regions_variant">
+          <option value="auto">рядом с видео, иначе боевая из этой папки</option>
+          <option value="sidecar">только рядом с видео</option>
+          <option value="production">только боевую из этой папки</option>
+          <option value="file">явный файл из настроек</option>
+        </select>
+      </label>
+      <p class="hint">Боевая разметка подбирается по имени и пути видео (для «…cam25…» — файл с «cam25» в имени).
+        Разметка рядом с видео — «&lt;имя&gt;.markup.json» с версиями; правится в редакторе разметки.
+        Для одного видео разметку можно выбрать в меню «Разметка» вверху. Какие зоны резать, выбирается под кадром
+        и запоминается за файлом разметки.</p>
     </details>
 
     <details open>
@@ -519,12 +527,13 @@
 </dialog>
 <div id="toast"></div>
 
+<script src="markup/static/neuro_markup_lab_shapes.js?v={{version}}"></script>
+<script src="markup/static/neuro_markup_lab_editor.js?v={{version}}"></script>
 <script src="static/js/core.js?v={{version}}"></script>
 <script src="static/js/settings.js?v={{version}}"></script>
 <script src="static/js/playlist.js?v={{version}}"></script>
 <script src="static/js/player.js?v={{version}}"></script>
 <script src="static/js/timeline.js?v={{version}}"></script>
-<script src="static/js/editor.js?v={{version}}"></script>
 <script src="static/js/history.js?v={{version}}"></script>
 <script src="static/js/auto.js?v={{version}}"></script>
 <script src="static/js/summary.js?v={{version}}"></script>

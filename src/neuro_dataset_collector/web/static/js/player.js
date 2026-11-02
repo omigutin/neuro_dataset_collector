@@ -8,21 +8,54 @@ const hasVideo = () => !!(state.info && state.info.video);
 
 // ---------------------------------------------------------------- состояние в верхней строке
 
+const MARKUP_NAMES = { sidecar: "рядом с видео", production: "боевая", file: "явный файл" };
+
+// Подпись разметки: вариант, версия рядом с видео или ключ боевой, имя явного файла.
+function markupTitle(markup) {
+  const name = MARKUP_NAMES[markup.variant] || markup.variant;
+  if (markup.variant === "sidecar") return markup.version ? `${name} · v${markup.version}` : `${name} · изменена вне версий`;
+  if (markup.variant === "production") return `${name} · ${markup.key}`;
+  return `${name} · ${fileName(markup.path)}`;
+}
+
+function renderMarkupMenu(info) {
+  const choice = info.markup_choice || { variant: "auto", version: null };
+  const has = hasVideo();
+  $$("#regions-menu [data-markup]").forEach((button) => {
+    const variant = button.dataset.markup;
+    button.classList.toggle("active", has && info.regions_source === "file" && choice.variant === variant);
+    button.disabled = !has || (variant === "sidecar" && !info.markup_sidecar)
+      || (variant === "production" && !info.markup_production_key) || (variant === "file" && !info.markup_file);
+  });
+  const production = $('#regions-menu [data-markup="production"]');
+  production.textContent = info.markup_production_key ? `Боевая: ${info.markup_production_key}` : "Боевая: не найдена";
+  const file = $('#regions-menu [data-markup="file"]');
+  file.textContent = info.markup_file ? `Явный файл: ${fileName(info.markup_file)}` : "Явный файл: не выбран";
+  file.title = info.markup_file || "";
+  const versions = info.markup_versions || [];
+  $("#markup-version-row").hidden = !has || !versions.length;
+  const current = info.markup_current;
+  $("#markup-version").innerHTML = `<option value="">текущая${current ? ` (v${current})` : ""}</option>`
+    + versions.slice().reverse().map((v) => `<option value="${v.number}">v${v.number}${v.number === current ? " · текущая" : ""}${v.comment ? ` · ${escapeHtml(v.comment)}` : ""}</option>`).join("");
+  $("#markup-version").value = choice.variant === "sidecar" && choice.version ? String(choice.version) : "";
+  $("#open-markup-editor").disabled = !has || autoRunning();
+  $("#edit-markup").disabled = !has || autoRunning();
+}
+
 function updateStatus() {
   const info = state.info || {};
   const chip = $("#regions-chip");
-  const useFile = info.regions_source === "file" && info.regions_file;
-  const origin = { video: "рядом с видео", camera: "по номеру камеры" }[info.regions_origin] || "выбрана вручную";
-  chip.querySelector(".txt").textContent = useFile ? `Разметка: ${fileName(info.regions_file)} · ${origin}` : "Разметка: весь кадр, без зон";
-  chip.title = useFile ? info.regions_file : "Зоны не заданы — сохраняется кадр целиком. Щелчок — выбрать файл разметки";
+  const useFile = info.regions_source === "file" && info.markup;
+  chip.querySelector(".txt").textContent = useFile ? `Разметка: ${markupTitle(info.markup)}` : "Разметка: весь кадр, без зон";
+  chip.title = useFile ? info.markup.path : "Зоны не заданы — сохраняется кадр целиком. Щелчок — выбрать разметку";
   chip.classList.toggle("ok", !!useFile && !info.regions_warning);
   chip.classList.toggle("warn", !!info.regions_warning);
-  $("#save-regions-as-menu").disabled = !useFile;
+  renderMarkupMenu(info);
   const warning = $("#regions-warning");
   warning.hidden = !info.regions_warning;
   if (info.regions_warning) {
     warning.innerHTML = `<b>Разметка:</b> ${escapeHtml(info.regions_warning)}
-      <button class="btn small" type="button" data-pick-regions>Выбрать файл разметки…</button>`;
+      <button class="btn small" type="button" data-pick-regions>Открыть файл разметки…</button>`;
   }
   const model = $("#model-chip");
   const name = modelSet() ? fileName(state.config.model.path) : null;
@@ -77,23 +110,62 @@ async function loadAnswers(index) {
 // ---------------------------------------------------------------- видео
 
 async function chooseRegions() {
-  stopEdit();
   closeMenus();
-  const start = (state.info && state.info.regions_file) || (state.config && state.config.regions.search_dir) || (state.info && state.info.video);
+  const start = (state.info && (state.info.markup_file || state.info.regions_file)) || (state.config && state.config.regions.search_dir) || (state.info && state.info.video);
   const path = await pickPath("file", "json", start, "Выберите файл разметки (LabelMe json)");
   if (!path) return;
   try {
     await applyVideo(await api("POST", "api/video/regions", { path }), state.frame);
+    await loadPlaylist();
   } catch (error) {
     toast(error.message, "bad");
   }
 }
 
 async function noRegions() {
-  stopEdit();
   closeMenus();
   try {
     await applyVideo(await api("POST", "api/video/regions", { path: null }), state.frame);
+  } catch (error) {
+    toast(error.message, "bad");
+  }
+}
+
+async function setMarkup(variant, version) {
+  closeMenus();
+  try {
+    await applyVideo(await api("POST", "api/video/markup", { variant, version: version || null }), state.frame);
+    await loadPlaylist();
+  } catch (error) {
+    toast(error.message, "bad");
+  }
+}
+
+// Редактор разметки neuro_markup_lab: открывается на разметке, по которой сейчас режется видео.
+function openMarkupEditor() {
+  closeMenus();
+  if (!hasVideo()) return;
+  pause();
+  const info = state.info;
+  const markup = info.markup;
+  const variant = markup && markup.variant !== "file" ? markup.variant : null;
+  if (markup && markup.variant === "file") toast("Явный файл в редакторе не открывается: открыта разметка рядом с видео или боевая", "bad");
+  NML.editor.open({
+    video: info.video,
+    jsonsDir: info.jsons_dir || "",
+    variant,
+    version: variant === "sidecar" && info.markup_choice.variant === "sidecar" ? info.markup_choice.version : null,
+    productionKey: info.markup_production_key || null,
+  });
+}
+
+// Редактор сохранил разметку открытого видео — перечитать зоны.
+async function onMarkupSaved(event) {
+  const detail = event.detail || {};
+  if (!hasVideo() || detail.video !== state.info.video) return;
+  try {
+    await applyVideo(await api("POST", "api/video/markup/saved", { variant: detail.variant }), state.frame);
+    await loadPlaylist();
   } catch (error) {
     toast(error.message, "bad");
   }
@@ -126,10 +198,10 @@ function renderCrumbs() {
 async function applyVideo(info, frame) {
   state.info = info;
   state.answers = null;
-  // Сервер сам меняет файл разметки (при открытии видео, после правки зон): иначе следующее сохранение
-  // настроек вернуло бы старый файл.
+  // Сервер сам включает зоны, когда у видео нашлась разметка: иначе следующее сохранение настроек
+  // вернуло бы прежний источник зон.
   const regions = state.config && state.config.regions;
-  if (regions && ((regions.file || null) !== (info.regions_file || null) || regions.source !== info.regions_source)) {
+  if (regions && regions.source !== info.regions_source) {
     await loadConfig();
   }
   const has = hasVideo();
@@ -139,7 +211,6 @@ async function applyVideo(info, frame) {
   $("#video-title").title = info.video || "";
   $("#dataset-chip").disabled = !has;
   $("#dataset-path").textContent = has ? info.dataset_dir : "";
-  updateFrameTools();
   $("#frame-placeholder").hidden = has;
   $(".view-cut .frame-wrap").hidden = !has;
   $(".view-cut .controls").hidden = !has;
@@ -181,7 +252,7 @@ function renderZones() {
   if (!shapes.length) {
     const full = answerFor("full");
     box.innerHTML = `<div class="zone-row"><span class="zname">Весь кадр<br><span class="muted small">зоны не заданы</span></span>${answerChip(full)}</div>
-      <button class="btn small" type="button" data-pick-regions>Выбрать файл разметки…</button>${error}`;
+      <button class="btn small" type="button" data-pick-regions>Открыть файл разметки…</button>${error}`;
     return;
   }
   box.innerHTML = shapes.map((s) => `<label class="zone-row ${s.selected ? "" : "off"}" title="${escapeHtml(s.label)}">
@@ -209,8 +280,18 @@ function onZoneToggle(event) {
 }
 
 // Щелчок по зоне на кадре — включить или выключить её нарезку.
+// Точка внутри многоугольника (луч вправо пересекает стороны нечётное число раз).
+function inside(points, x, y) {
+  let hit = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const [xi, yi] = points[i], [xj, yj] = points[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
+  }
+  return hit;
+}
+
 function onFrameClick(event) {
-  if (state.edit || autoRunning() || !state.info || !state.info.shapes) return;
+  if (autoRunning() || !state.info || !state.info.shapes) return;
   const img = $("#frame");
   const rect = img.getBoundingClientRect();
   // Кадр вписан в рамку с сохранением пропорций: учитываем поля.
@@ -278,8 +359,8 @@ function showFrame(index) {
   $("#time").textContent = `${fmtTime(index / fps)} / ${fmtTime(state.info.frames / fps)}`;
   $("#frame-badge").hidden = false;
   $("#frame-badge").textContent = `Кадр ${index} · ${fmtTime(index / fps)}`;
-  const model = modelOn() && !state.edit ? 1 : 0;
-  const zones = state.edit || !state.showZones ? 0 : 1;
+  const model = modelOn() ? 1 : 0;
+  const zones = state.showZones ? 1 : 0;
   $("#frame").src = `api/video/frame/${index}?zones=${zones}&model=${model}&t=${Date.now()}`;
   moveTimelineCursor();
   rememberPosition();
@@ -293,8 +374,7 @@ function rememberPosition() {
 
 function onFrameLoaded() {
   state.loading = false;
-  if (state.edit) drawEditor();
-  if (modelOn() && !state.edit) loadAnswers(state.frame);
+  if (modelOn()) loadAnswers(state.frame);
   if (!state.playing) return;
   const fps = state.info.fps || 25;
   const delay = Math.max(15, (1000 * step()) / fps / Number($("#speed").value));
@@ -357,6 +437,8 @@ function toggleMenu(id) {
 }
 
 function onKey(event) {
+  // Открыт редактор разметки: клавиши его, кадры не сохраняются
+  if (window.NML && NML.editor.isOpen()) return;
   if ($("#picker").open || $("#classes-dialog").open || $("#help-dialog").open) return;
   if (event.key === "Escape") { closeMenus(); if (drawerOpen()) { closeDrawers(); return; } }
   if (drawerOpen()) return;
@@ -365,7 +447,6 @@ function onKey(event) {
   if (state.view !== "cut") return;
   const key = event.key;
   const big = event.shiftKey ? 10 : 1;
-  if (state.edit) { editKey(event); return; }
   if (autoRunning()) return;
   if (event.altKey && event.code === "KeyM") { event.preventDefault(); toggleModel(); return; }
   if (key === "PageDown") { event.preventDefault(); stepVideo(1); return; }
@@ -391,6 +472,11 @@ function classOfKey(event) {
 
 function bindPlayer() {
   $("#pick-regions").onclick = chooseRegions;
+  $$("#regions-menu [data-markup]").forEach((button) => (button.onclick = () => setMarkup(button.dataset.markup)));
+  $("#markup-version").onchange = (event) => setMarkup("sidecar", Number(event.target.value) || null);
+  $("#open-markup-editor").onclick = openMarkupEditor;
+  $("#edit-markup").onclick = openMarkupEditor;
+  document.addEventListener("nml:saved", onMarkupSaved);
   $("#no-regions").onclick = noRegions;
   $("#regions-chip").onclick = (event) => { event.stopPropagation(); toggleMenu("#regions-menu"); };
   document.addEventListener("click", (event) => {

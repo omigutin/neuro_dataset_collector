@@ -91,6 +91,11 @@ button:disabled, input:disabled, select:disabled { opacity: .45; cursor: not-all
   box-shadow: var(--shadow); display: flex; flex-direction: column; z-index: 25; min-width: 260px; padding: 6px; }
 .menu-list > button { border: 0; background: none; text-align: left; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
 .menu-list > button:hover:not(:disabled) { background: var(--sunk); }
+.menu-list > button.active { background: var(--soft); font-weight: 600; }
+.menu-list > hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; width: 100%; }
+.menu-head { padding: 6px 10px 2px; font-size: 12px; color: var(--muted); }
+.menu-row { display: flex; flex-direction: column; gap: 3px; padding: 4px 10px 6px; font-size: 13px; margin: 0; }
+.menu-row[hidden] { display: none; }
 .menu-list.wide { width: 380px; padding: 14px; gap: 10px; }
 .menu-list.wide label { margin: 0; }
 .menu-list.wide select { width: 100%; margin-top: 3px; }
@@ -160,14 +165,11 @@ button:disabled, input:disabled, select:disabled { opacity: .45; cursor: not-all
 .frame-wrap { position: relative; border-radius: 10px; overflow: hidden; background: #111; flex: none; display: flex; justify-content: center; }
 #frame, #auto-frame { display: block; max-width: 100%; max-height: 62vh; min-width: min(100%, 480px); height: auto; background: #111; }
 #frame { cursor: pointer; }
-#editor { position: absolute; left: 0; top: 0; cursor: crosshair; touch-action: none; }
 .auto-overlay { position: absolute; left: 10px; bottom: 10px; background: rgba(17,17,17,.75); color: #fff; padding: 4px 10px; border-radius: 6px; font-size: 13px; pointer-events: none; }
 .frame-badge { position: absolute; left: 10px; top: 10px; background: rgba(255,255,255,.92); border-radius: 14px; padding: 3px 10px; font-size: 12px; font-weight: 600; pointer-events: none; }
-.frame-tools { position: absolute; top: 10px; right: 10px; display: flex; gap: 6px; z-index: 2; }
 .placeholder { border: 2px dashed var(--line-strong); border-radius: 12px; min-height: 360px; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 10px; color: var(--muted); font-size: 16px; background: var(--card); }
 .placeholder svg.big { width: 48px; height: 48px; fill: none; stroke: currentColor; stroke-width: 1.5; }
-.edit-bar { padding: 8px 12px; border: 1px solid #b9cdf7; background: var(--soft); border-radius: var(--radius); font-size: 13px; }
 .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 #play { font-size: 14px; }
 .stage.auto-running .controls, .stage.auto-running .timeline { opacity: .45; pointer-events: none; }

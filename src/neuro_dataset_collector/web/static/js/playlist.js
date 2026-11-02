@@ -20,13 +20,10 @@ async function chooseVideo() {
 
 async function openVideo(path) {
   if (autoRunning()) { toast("Идёт автонарезка — дождитесь окончания или остановите её", "bad"); return; }
-  if (state.edit && state.edit.history.length && !confirm("Зоны изменены, но не сохранены. Перейти к другому видео без сохранения?")) return;
-  stopEdit();
   try {
     pause();
     const info = await api("POST", "api/video/open", { path });
-    if (info.regions_origin === "video") toast(`Разметка рядом с видео: ${fileName(info.regions_file)}`, "ok");
-    else if (info.suggested_regions) toast(`Разметка по номеру камеры: ${fileName(info.suggested_regions)}`, "ok");
+    if (info.markup) toast(`Разметка: ${markupTitle(info.markup)}`, "ok");
     await applyVideo(info, info.frame);
     if (info.playlist_changed) await loadPlaylist(); else renderPlaylist();
   } catch (error) {
@@ -64,7 +61,7 @@ function splitName(name) {
 }
 
 const playlistView = { show: "all" };
-const REGION_TAGS = { video: "своя разметка", camera: "разметка по камере" };
+const REGION_TAGS = { sidecar: "разметка рядом с видео", production: "боевая разметка", file: "явный файл разметки" };
 
 function renderPlaylist() {
   const current = state.info && state.info.video;

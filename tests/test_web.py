@@ -4,6 +4,7 @@ import json
 import shutil
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -11,8 +12,10 @@ pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient
+from neuro_markup_lab.storage import SaveMode, VersionStore
 
 from conftest import write_video as _video
+from neuro_dataset_collector.catalog.catalog import Catalog
 from neuro_dataset_collector.config import load_config
 from neuro_dataset_collector.web.app import create_app
 from neuro_dataset_collector.web.session import WebSession
@@ -41,10 +44,11 @@ def test_config_saved_to_file(client: TestClient, workspace: Path) -> None:
     assert load_config(workspace / "ndc.yaml").classes == ["EMPTY", "FULL", "UNKNOWN"]
 
 
-def test_open_video_suggests_regions_and_saves_next_to_video(client: TestClient, workspace: Path) -> None:
+def test_open_video_finds_production_markup_and_saves_next_to_video(client: TestClient, workspace: Path) -> None:
     video = workspace / "ml_cam25_0101.avi"
     info = client.post("/api/video/open", json={"path": str(video)}).json()
-    assert info["suggested_regions"] == str(workspace / "jsons" / "norebo_cam25.json")
+    assert info["markup"]["variant"] == "production" and info["markup"]["key"] == "norebo_cam25"
+    assert info["regions_file"] == str(workspace / "jsons" / "norebo_cam25.json")
     assert [r["id"] for r in info["regions"]] == ["1", "2"]
     assert info["dataset_dir"] == str(workspace / "ml_cam25_0101_dataset")
     frame = client.get("/api/video/frame/3")
@@ -116,29 +120,65 @@ def test_browse_and_pick_fallback(client: TestClient, workspace: Path, monkeypat
     assert client.post("/api/pick", json={"kind": "file"}).json() == {"path": "C:/video.avi", "available": True}
 
 
-def test_edit_regions_saved_next_to_video_and_used_first(client: TestClient, workspace: Path) -> None:
+def _moved(document: dict[str, Any], x: float) -> dict[str, Any]:
+    """ Копия разметки: первая зона сдвинута в точку x. """
+    moved = json.loads(json.dumps(document))
+    moved["shapes"][0]["points"] = [[x, x], [30, 20]]
+    return moved
+
+
+def test_markup_variants_and_versions(client: TestClient, workspace: Path) -> None:
     video = workspace / "ml_cam25_0101.avi"
-    original = (workspace / "jsons" / "norebo_cam25.json").read_text(encoding="utf-8")
+    production = workspace / "jsons" / "norebo_cam25.json"
+    original = json.loads(production.read_text(encoding="utf-8"))
     info = client.post("/api/video/open", json={"path": str(video)}).json()
-    assert info["regions_origin"] == "camera" and info["regions_editable"] is True
-    assert [r["shape"] for r in info["regions"]] == ["rectangle", "rectangle"]
-    box = [[2, 2], [30, 2], [30, 20], [2, 20]]
-    edited = client.post("/api/video/regions/edit", json={"regions": {"1": box}}).json()
-    sidecar = workspace / "ml_cam25_0101.json"
-    assert edited["regions_file"] == str(sidecar) and edited["regions_origin"] == "video"
-    assert edited["regions"][0]["polygon"][0] == [2.0, 2.0]
-    assert json.loads(sidecar.read_text(encoding="utf-8"))["shapes"][0]["points"] == [[2.0, 2.0], [30.0, 20.0]]
-    assert (workspace / "jsons" / "norebo_cam25.json").read_text(encoding="utf-8") == original
-    assert client.post("/api/video/regions/edit", json={"regions": {"1": [[5, 5], [5, 5]]}}).status_code == 400
-    # При следующем открытии берётся json рядом с видео.
-    client.post("/api/video/regions", json={"path": None})
-    assert client.post("/api/video/open", json={"path": str(video)}).json()["regions_file"] == str(sidecar)
-    # Сохранить в файл камеры (перезаписать).
-    target = client.get("/api/video/regions/save-target").json()["path"]
-    assert target == str(workspace / "jsons" / "norebo_cam25.json")
-    assert client.post("/api/video/regions/save-as", json={"path": target}).status_code == 200
-    assert json.loads(Path(target).read_text(encoding="utf-8"))["shapes"][0]["points"] == [[2.0, 2.0], [30.0, 20.0]]
-    assert client.post("/api/video/regions/save-as", json={"path": str(workspace / "x.txt")}).status_code == 400
+    assert info["markup"]["variant"] == "production" and info["markup_sidecar"] is False
+    assert info["markup_production_key"] == "norebo_cam25" and info["jsons_dir"] == str(workspace / "jsons")
+    # Редактор сохранил разметку рядом с видео двумя версиями
+    store = VersionStore(video)
+    store.save(_moved(original, 2), SaveMode.NEW_VERSION)
+    store.save(_moved(original, 4), SaveMode.NEW_VERSION)
+    info = client.post("/api/video/markup/saved", json={"variant": "sidecar"}).json()
+    assert info["markup"]["variant"] == "sidecar" and info["markup"]["version"] == 2
+    assert info["regions"][0]["polygon"][0] == [4.0, 4.0]
+    assert [v["number"] for v in info["markup_versions"]] == [1, 2] and info["markup_current"] == 2
+    info = client.post("/api/video/markup", json={"variant": "sidecar", "version": 1}).json()
+    assert info["markup"]["version"] == 1 and info["regions"][0]["polygon"][0] == [2.0, 2.0]
+    assert client.post("/api/save", json={"frame": 3, "label": "FULL", "regions": ["1"]}).json()["results"][0]["ok"]
+    with Catalog(workspace / "ml_cam25_0101_dataset") as catalog:
+        [record] = catalog.records(catalog.collections()[0])
+    assert record.markup_variant == "sidecar" and record.markup_version == 1
+    info = client.post("/api/video/markup", json={"variant": "production"}).json()
+    assert info["markup"]["variant"] == "production" and info["regions"][0]["polygon"][0] == [0.0, 0.0]
+    assert client.post("/api/video/markup", json={"variant": "production", "version": 1}).status_code == 400
+    info = client.post("/api/video/markup", json={"variant": "sidecar", "version": 9}).json()
+    assert info["markup"] is None and "v9" in info["regions_warning"]
+    # Выбор запоминается за видео; auto — снова как в настройках (рядом с видео, текущая версия)
+    assert load_state().markup[str(video)].version == 9
+    info = client.post("/api/video/markup", json={"variant": "auto"}).json()
+    assert info["markup"]["variant"] == "sidecar" and info["markup"]["version"] == 2
+    assert production.read_text(encoding="utf-8") == json.dumps(original)
+
+
+def test_legacy_markup_migrated_on_open(client: TestClient, workspace: Path) -> None:
+    video = workspace / "ml_cam25_0101.avi"
+    legacy = workspace / "ml_cam25_0101.json"
+    zones = json.loads((workspace / "jsons" / "norebo_cam25.json").read_text(encoding="utf-8"))
+    legacy.write_text(json.dumps(_moved(zones, 3)), encoding="utf-8")
+    playlist = client.post("/api/playlist", json={"path": str(workspace)}).json()
+    assert playlist["items"][0]["regions"] == "sidecar"
+    info = client.post("/api/video/open", json={"path": str(video)}).json()
+    assert info["markup"]["variant"] == "sidecar" and info["markup"]["version"] == 1
+    assert info["markup_versions"][0]["comment"] == "перенос из ml_cam25_0101.json"
+    assert info["regions"][0]["polygon"][0] == [3.0, 3.0] and legacy.is_file()
+
+
+def test_markup_editor_mounted(client: TestClient, workspace: Path) -> None:
+    assert client.get("/markup/").status_code == 200
+    assert client.get("/markup/static/neuro_markup_lab_editor.js").status_code == 200
+    video = workspace / "ml_cam25_0101.avi"
+    locations = client.get("/markup/api/locations", params={"video": str(video), "jsons": str(workspace / "jsons")})
+    assert locations.status_code == 200 and "norebo_cam25" in locations.text
 
 
 def test_frame_without_zones(client: TestClient, workspace: Path) -> None:
@@ -157,7 +197,7 @@ def test_playlist_and_auto_for_all_videos(client: TestClient, workspace: Path) -
     _video(folder / "ml_cam25_a_dataset" / "copy.avi", frames=2)   # папки датасетов пропускаются
     data = client.post("/api/playlist", json={"path": str(folder)}).json()
     assert [item["name"] for item in data["items"]] == [str(Path("day2") / "ml_cam25_b.avi"), "ml_cam25_a.avi"]
-    assert all(item["saved"] == 0 and item["regions"] == "camera" for item in data["items"])
+    assert all(item["saved"] == 0 and item["regions"] == "production" for item in data["items"])
     assert client.post("/api/playlist", json={"path": str(folder / "nope")}).status_code == 404
 
     client.post("/api/auto/start", json={"scope": "playlist"})
@@ -204,21 +244,6 @@ def test_interface_files_are_not_cached(client: TestClient) -> None:
     assert page.headers["cache-control"] == "no-cache"
     assert '"static/js/main.js?v=' in page.text and "{{version}}" not in page.text
     assert client.get("/static/js/main.js").headers["cache-control"] == "no-cache"
-
-
-def test_rectangle_becomes_polygon_and_points_change(client: TestClient, workspace: Path) -> None:
-    video = workspace / "ml_cam25_0101.avi"
-    client.post("/api/video/open", json={"path": str(video)})
-    five = [[0, 0], [16, 0], [32, 0], [32, 24], [0, 24]]
-    info = client.post("/api/video/regions/edit", json={"regions": {"1": {"points": five, "shape": "polygon"}}}).json()
-    assert info["regions"][0]["shape"] == "polygon" and len(info["regions"][0]["polygon"]) == 5
-    shape = json.loads((workspace / "ml_cam25_0101.json").read_text(encoding="utf-8"))["shapes"][0]
-    assert shape["shape_type"] == "polygon" and len(shape["points"]) == 5 and shape["wz"] == 1
-    # Точку удалили — осталось 4; меньше трёх нельзя.
-    four = {"1": {"points": five[:2] + five[3:], "shape": "polygon"}}
-    assert len(client.post("/api/video/regions/edit", json={"regions": four}).json()["regions"][0]["polygon"]) == 4
-    two = {"1": {"points": five[:2], "shape": "polygon"}}
-    assert client.post("/api/video/regions/edit", json={"regions": two}).status_code == 400
 
 
 def test_history_relabel_delete_and_rejections(client: TestClient, workspace: Path,

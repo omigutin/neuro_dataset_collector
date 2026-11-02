@@ -32,7 +32,6 @@ function init() {
   bindPlaylist();
   bindPlayer();
   bindTimeline();
-  bindEditor();
   bindHistory();
   bindAuto();
   bindSummary();

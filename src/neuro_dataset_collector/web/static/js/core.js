@@ -14,7 +14,6 @@ const state = {
   playlist: { dir: null, items: [] },
   counts: {},          // сохранено в открытом видео: класс → число
   auto: null,          // ход автонарезки (ответ /api/auto/status)
-  edit: null,          // правка зон: { regions: [{id, shape, points}], active, vertex, drag, history }
   model: false,        // показывать ответы модели на кадре
   showZones: true,     // рисовать зоны на кадре
   answers: null,       // ответы модели на текущем кадре: { frame, answers: [{zone, label, conf}] }

@@ -32,6 +32,7 @@ function fillSettings(config) {
   selectNearest(field("dedup"), dedup ? dedup.threshold : 5);
   set("on_duplicate", config.manual.on_duplicate);
   set("regions_search_dir", config.regions.search_dir);
+  set("regions_variant", config.regions.variant);
   set("model_path", config.model.path);
   set("interval", interval && interval.seconds != null ? interval.seconds : 1);
   selectNearest(field("scene"), scene ? scene.min_diff : null);
@@ -121,6 +122,7 @@ function collectSettings() {
   c.regions.mask_outside = on("mask_outside");
   c.regions.padding = Math.max(0, n("padding") || 0);
   c.regions.search_dir = v("regions_search_dir") || null;
+  c.regions.variant = v("regions_variant");
   c.manual.on_duplicate = v("on_duplicate");
   c.model.path = v("model_path") || null;
   const withModel = !!c.model.path;

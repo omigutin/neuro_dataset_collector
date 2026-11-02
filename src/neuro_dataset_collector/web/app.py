@@ -20,22 +20,25 @@ from typing import Any
 from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from neuro_markup_lab.web import mount_app as mount_markup_lab
 from pydantic import BaseModel, ValidationError
 
 from .. import __version__
-from ..config.models import NAME_PATTERN, dataset_dir_for_video
+from ..config.models import NAME_PATTERN, MarkupChoice, dataset_dir_for_video
 from ..journal.table import JournalFilter
-from ..regions.providers import ShapeKind
 from . import DEFAULT_PORT
+from .markup_host import CollectorMarkupHost
 from .picker import pick_path
 from .session import AutoMode, AutoScope, WebSession
 
-__all__ = ["APP_ID", "create_app", "find_port", "mount_app", "run"]
+__all__ = ["APP_ID", "MARKUP_PREFIX", "create_app", "find_port", "mount_app", "run"]
 
 # Сколько следующих портов пробовать, если порт занят другой программой.
 _PORT_ATTEMPTS = 20
 # Ответ /api/ping: по нему видно, что на порту уже работает этот инструмент.
 APP_ID = "neuro_dataset_collector"
+# Редактор разметки neuro_markup_lab внутри сборщика (страница — MARKUP_PREFIX + "/")
+MARKUP_PREFIX = "/markup"
 
 _STATIC = Path(__file__).parent / "static"
 _PICK_EXT = {
@@ -68,30 +71,11 @@ class PickRequest(BaseModel):
     title: str = ""
 
 
-class RegionEdit(BaseModel):
-    """ Исправленная зона: точки контура в координатах кадра и тип фигуры (если менялся). """
+class MarkupRequest(BaseModel):
+    """ Выбор разметки открытого видео. """
 
-    points: list[tuple[float, float]]
-    shape: ShapeKind | None = None
-
-
-class RegionsEditRequest(BaseModel):
-    """ Исправленные зоны: номер зоны → зона (или просто список точек). """
-
-    regions: dict[str, RegionEdit | list[tuple[float, float]]]
-
-    def edits(self) -> tuple[dict[str, list[tuple[float, float]]], dict[str, ShapeKind]]:
-        """ Точки и новые типы фигур по номерам зон. """
-        points: dict[str, list[tuple[float, float]]] = {}
-        shapes: dict[str, ShapeKind] = {}
-        for region_id, edit in self.regions.items():
-            if isinstance(edit, RegionEdit):
-                points[region_id] = list(edit.points)
-                if edit.shape is not None:
-                    shapes[region_id] = edit.shape
-            else:
-                points[region_id] = list(edit)
-        return points, shapes
+    variant: MarkupChoice = MarkupChoice.AUTO
+    version: int | None = None
 
 
 class AutoRequest(BaseModel):
@@ -178,6 +162,7 @@ def create_app(session: WebSession) -> FastAPI:
 
     app = FastAPI(title="neuro_dataset_collector", docs_url="/api/docs", lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=_STATIC), name="static")
+    mount_markup_lab(app, MARKUP_PREFIX, host=CollectorMarkupHost(lambda: session.config.regions.search_dir))
 
     @app.middleware("http")
     async def no_stale_files(request: Request, call_next: Callable[[Request], Any]) -> Any:
@@ -291,20 +276,15 @@ def create_app(session: WebSession) -> FastAPI:
         result: dict[str, Any] = _call(lambda: session.set_regions_file(Path(path) if path else None))
         return result
 
-    @app.post("/api/video/regions/edit")
-    def edit_regions(request: RegionsEditRequest) -> dict[str, Any]:
-        points, shapes = request.edits()
-        result: dict[str, Any] = _call(lambda: session.edit_regions(points, shapes))
+    @app.post("/api/video/markup")
+    def set_markup(request: MarkupRequest) -> dict[str, Any]:
+        result: dict[str, Any] = _call(lambda: session.set_markup(request.variant, request.version))
         return result
 
-    @app.get("/api/video/regions/save-target")
-    def regions_save_target() -> dict[str, str | None]:
-        target = session.regions_save_target()
-        return {"path": str(target) if target else None}
-
-    @app.post("/api/video/regions/save-as")
-    def save_regions_as(path: str = Body(..., embed=True)) -> dict[str, str]:
-        return {"path": str(_call(lambda: session.save_regions_as(Path(path))))}
+    @app.post("/api/video/markup/saved")
+    def markup_saved(variant: str = Body(..., embed=True)) -> dict[str, Any]:
+        result: dict[str, Any] = _call(lambda: session.markup_saved(variant))
+        return result
 
     # ---- плейлист ----
 

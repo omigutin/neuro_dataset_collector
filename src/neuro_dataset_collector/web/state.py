@@ -9,11 +9,23 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-__all__ = ["SessionState", "app_dir", "default_config_path", "load_state", "save_state"]
+from ..config.models import MarkupChoice
+
+__all__ = ["SessionState", "VideoMarkup", "app_dir", "default_config_path", "load_state", "save_state"]
 
 _log = logging.getLogger("neuro_dataset_collector")
 _STATE_FILE = "session.yaml"
 _CONFIG_FILE = "settings.yaml"
+
+
+class VideoMarkup(BaseModel):
+    """ Разметка, выбранная для видео вручную: вариант, версия разметки рядом с видео, явный файл. """
+
+    model_config = ConfigDict(extra="ignore")
+
+    variant: MarkupChoice = MarkupChoice.AUTO
+    version: int | None = Field(default=None, ge=1)
+    file: str | None = None
 
 
 class SessionState(BaseModel):
@@ -29,6 +41,8 @@ class SessionState(BaseModel):
     positions: dict[str, int] = Field(default_factory=dict)
     # Какие зоны резать: файл разметки (камера) → номера зон.
     zones: dict[str, list[str]] = Field(default_factory=dict)
+    # Разметка, выбранная для видео вручную: видео → выбор (нет записи — как в настройках).
+    markup: dict[str, VideoMarkup] = Field(default_factory=dict)
 
 
 def app_dir() -> Path:
@@ -64,4 +78,5 @@ def save_state(state: SessionState) -> None:
     """ Сохраняет состояние сеанса. """
     path = app_dir() / _STATE_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(state.model_dump(), allow_unicode=True, sort_keys=False), encoding="utf-8")
+    data = state.model_dump(mode="json")
+    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")

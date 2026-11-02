@@ -23,7 +23,6 @@ async function autoStart() {
   const what = mode === "model" ? "прогон моделью" : "автонарезку";
   if (scope === "playlist" && !confirm(`Запустить ${what} всех видео плейлиста (${state.playlist.items.length})?`)) return;
   if (scope === "video" && !hasVideo()) { toast("Сначала откройте видео", "bad"); return; }
-  if (state.edit) { toast("Сначала сохраните или отмените правку зон", "bad"); return; }
   try {
     pause();
     await api("POST", "api/auto/start", { scope, mode });
@@ -99,7 +98,7 @@ function showAutoView(on) {
   $("#frame").hidden = on;
   if (on) { $("#frame-placeholder").hidden = true; $(".view-cut .frame-wrap").hidden = false; }
   $(".view-cut .stage").classList.toggle("auto-running", on);
-  updateFrameTools();
+  $("#edit-markup").disabled = on || !hasVideo();
   if (on && !wasOn) nextAutoFrame();
 }
 

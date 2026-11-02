@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess
@@ -15,26 +14,20 @@ from typing import Any, Literal
 
 import numpy as np
 import yaml
+from neuro_markup_lab.storage import VersionStore
 
 from .._cv import get_cv2
 from ..catalog.catalog import CATALOG_FILENAME, Catalog
 from ..config.loader import dump_config, load_config, resolve_paths, save_config
-from ..config.models import DATASET_DIR_SUFFIX, CollectorConfig, RegionSource, TaskType
+from ..config.models import DATASET_DIR_SUFFIX, CollectorConfig, MarkupChoice, RegionsConfig, RegionSource, TaskType
 from ..core.results import ExportReport, SaveResult, SyncReport
-from ..core.types import Frame, Point, Prediction, Region, SampleStatus
+from ..core.types import Frame, Prediction, Region, SampleStatus
 from ..export.roboflow import export_dataset
 from ..pipeline.collector import FULL_FRAME_ID, Collector
 from ..pipeline.model_run import JOURNAL_DIR, ModelRunReport, ZoneAnswer, run_model
 from ..pipeline.offline import OfflineReport, collect_videos
-from ..regions.providers import (
-    LabelMeRegions,
-    RegionsOrigin,
-    ShapeKind,
-    find_regions_file,
-    sidecar_regions_file,
-    suggest_regions_file,
-    write_labelme,
-)
+from ..regions.markup import MarkupInfo, legacy_sidecar_file, migrate_legacy_sidecar, production_key, resolve_markup
+from ..regions.providers import LabelMeRegions
 from ..review.manual import reject_sample, relabel_sample, sample_files
 from ..review.model_check import ModelCheckReport, check_with_model, cross_label_duplicates
 from ..review.sync import sync_collection
@@ -43,7 +36,7 @@ from ..storage.layout import IMAGES_DIR, SUSPECT_DIR
 from .history import RejectionLog, sample_item
 from .journal_view import JournalService
 from .model_view import ModelView
-from .state import SessionState, default_config_path, load_state, save_state
+from .state import SessionState, VideoMarkup, default_config_path, load_state, save_state
 
 __all__ = ["AutoMode", "AutoRunState", "AutoScope", "CheckState", "WebSession"]
 
@@ -57,6 +50,8 @@ AutoScope = Literal["video", "playlist"]
 AutoMode = Literal["collect", "model"]
 # Кадры, которые показываются в истории (удалённые и сбойные не показываются).
 _HISTORY_STATUSES = (SampleStatus.PENDING, SampleStatus.SUSPECT, SampleStatus.VERIFIED)
+# Как называть варианты разметки в сообщениях.
+_VARIANT_NAMES = {"sidecar": "рядом с видео", "production": "боевая", "file": "явный файл"}
 # Номер камеры в имени видео или файла разметки.
 _CAMERA = re.compile(r"cam0*(\d+)", re.IGNORECASE)
 # Сколько секунд зона подсвечивается после сохранения или отказа при показе автонарезки.
@@ -112,6 +107,9 @@ class WebSession:
     frame: int = 0
     _positions: dict[str, int] = field(default_factory=dict)
     _zones: dict[str, list[str]] = field(default_factory=dict)
+    # Разметка, выбранная для видео вручную, и разметка открытого видео.
+    _markup_choices: dict[str, VideoMarkup] = field(default_factory=dict)
+    _markup: MarkupInfo | None = None
     _reader: VideoReader | None = None
     _collector: Collector | None = None
     # Каталоги открываются один раз на корень: ручная нарезка и автонарезка пишут в одну историю
@@ -155,11 +153,13 @@ class WebSession:
             save_config(session.config, session.config_path)
         session._positions = dict(state.positions)
         session._zones = {key: list(value) for key, value in state.zones.items()}
+        session._markup_choices = dict(state.markup)
         if state.playlist_dir and Path(state.playlist_dir).is_dir():
             session.playlist_dir = Path(state.playlist_dir)
         same_config = config_path is None or state.config_path == str(session.config_path)
         if same_config and state.video and Path(state.video).is_file():
             session.video, session.frame = Path(state.video), max(0, state.frame)
+            session._markup = session.markup_for(session.video)
         session._save_state()
         return session
 
@@ -176,6 +176,7 @@ class WebSession:
             frame=self.frame,
             positions=dict(self._positions),
             zones=dict(self._zones),
+            markup=dict(self._markup_choices),
         ))
 
     def remember_frame(self, frame: int) -> None:
@@ -186,9 +187,10 @@ class WebSession:
     # ---- настройки ----------------------------------------------------------------------------------
 
     def effective_config(self) -> CollectorConfig:
-        """ Настройки с учётом открытого видео (папка датасета рядом с видео) и выбранных зон. """
-        config = self.config.for_video(self.video) if self.video else self.config.model_copy(deep=True)
-        return self._with_zones(config)
+        """ Настройки с учётом открытого видео (папка датасета, разметка) и выбранных зон. """
+        if self.video is not None:
+            return self.config_for_video(self.video)
+        return self._with_zones(self.config.model_copy(deep=True))
 
     def _with_zones(self, config: CollectorConfig) -> CollectorConfig:
         """
@@ -232,7 +234,7 @@ class WebSession:
             if not ids:
                 raise ValueError("Choose at least one region")
             self._close_collector()
-            self._zones[str(self.config.regions.file)] = [i for i in ids if i in known]
+            self._zones[str(self._markup_file())] = [i for i in ids if i in known]
             self._save_state()
         return self.video_info()
 
@@ -247,6 +249,8 @@ class WebSession:
             self._close_collector(check_auto=True)
             self.config = config
             save_config(config, self.config_path)
+            # Разметка видео зависит от настроек: папка разметки, какой вариант брать
+            self._refresh_markup()
         return config
 
     def update_config_yaml(self, text: str) -> CollectorConfig:
@@ -263,6 +267,7 @@ class WebSession:
             self._close_collector(check_auto=True)
             self.config_path = path.resolve()
             self.config = config
+            self._refresh_markup()
             self._save_state()
         return config
 
@@ -406,8 +411,9 @@ class WebSession:
 
     def open_video(self, path: Path) -> dict[str, Any]:
         """
-            Открывает видео: своя папка датасета (при next_to_video) и файл зон —
-            json рядом с видео, иначе файл с тем же номером камеры из папки разметки.
+            Открывает видео: своя папка датасета (при next_to_video) и его разметка — выбранная для видео
+            вручную, иначе по настройкам: рядом с видео, иначе боевая из папки разметки, иначе явный файл.
+            Старый «<имя>.json» рядом с видео переносится в разметку рядом с видео первой версией.
             Кадр — тот, на котором остановились в этом видео в прошлый раз.
             Видео не из папки плейлиста — плейлистом становится папка этого видео.
         """
@@ -415,7 +421,6 @@ class WebSession:
         if not path.is_file():
             raise FileNotFoundError(f"Video not found: {path}")
         reader = VideoReader(path)
-        found: tuple[Path, RegionsOrigin] | None = None
         with self._lock:
             self._close_collector()
             self._close_reader()
@@ -426,25 +431,95 @@ class WebSession:
             playlist_changed = self.playlist_dir is None or self.playlist_dir not in path.parents
             if playlist_changed:
                 self.playlist_dir = path.parent
-            found = find_regions_file(path, self.config.regions.search_dir)
-            if found is not None and (found[0] != self.config.regions.file
-                                      or self.config.regions.source != RegionSource.FILE):
-                self._use_regions_file(found[0])
+            self._markup = self.markup_for(path)
+            # Нашлась разметка — режем по зонам (так было и до выбора «весь кадр» в прошлом видео)
+            if self._markup is not None and self.config.regions.source != RegionSource.FILE:
+                self.config.regions.source = RegionSource.FILE
+                save_config(self.config, self.config_path)
             self._save_state()
         info = self.video_info()
-        info["suggested_regions"] = str(found[0]) if found is not None and found[1] == "camera" else None
         info["playlist_changed"] = playlist_changed
         return info
 
-    def _use_regions_file(self, path: Path) -> None:
-        """ Делает файл зон текущим и сохраняет настройки. """
-        # Сначала файл, потом источник: проверка настроек требует файл при source=file.
-        self.config.regions.file = path
-        self.config.regions.source = RegionSource.FILE
-        save_config(self.config, self.config_path)
+    # ---- разметка видео ------------------------------------------------------------------------------
+
+    def _video_regions(self, video: Path) -> RegionsConfig:
+        """ Настройки зон с выбором разметки для этого видео. """
+        regions = self.config.regions.model_copy(deep=True)
+        choice = self._markup_choices.get(str(video))
+        if choice is not None:
+            # Сначала файл, потом вариант: проверка настроек требует файл при variant=file
+            if choice.file:
+                regions.file = Path(choice.file)
+            regions.variant = choice.variant
+            regions.version = choice.version
+        return regions
+
+    def markup_for(self, video: Path) -> MarkupInfo | None:
+        """ Разметка видео по выбору для него и настройкам; старый «<имя>.json» сначала переносится. """
+        migrate_legacy_sidecar(video)
+        return resolve_markup(video, self._video_regions(video))
+
+    def _markup_file(self) -> Path | None:
+        """ Файл разметки, по которому режется открытое видео; None — режется весь кадр. """
+        if self._markup is None or self.config.regions.source != RegionSource.FILE:
+            return None
+        return self._markup.path
+
+    def _refresh_markup(self) -> None:
+        if self.video is not None:
+            self._markup = self.markup_for(self.video)
+
+    def set_markup(self, variant: MarkupChoice, version: int | None = None) -> dict[str, Any]:
+        """
+            Выбирает разметку открытого видео: auto — как в настройках, sidecar (версия ``version``; None —
+            текущая), production — боевая, file — явный файл, выбранный ранее. Выбор запоминается за видео.
+        """
+        with self._lock:
+            if self.video is None:
+                raise FileNotFoundError("Video is not opened")
+            if version is not None and variant != MarkupChoice.SIDECAR:
+                raise ValueError("Only markup beside the video has versions")
+            key = str(self.video)
+            previous = self._markup_choices.get(key)
+            if variant == MarkupChoice.AUTO:
+                self._markup_choices.pop(key, None)
+            else:
+                file = previous.file if previous is not None else None
+                if variant == MarkupChoice.FILE and file is None and self.config.regions.file is None:
+                    raise ValueError("Choose a markup file first")
+                self._markup_choices[key] = VideoMarkup(variant=variant, version=version, file=file)
+            self._close_collector()
+            if self.config.regions.source != RegionSource.FILE:
+                self.config.regions.source = RegionSource.FILE
+                save_config(self.config, self.config_path)
+            self._refresh_markup()
+            self._save_state()
+        return self.video_info()
+
+    def markup_saved(self, variant: str) -> dict[str, Any]:
+        """
+            Разметку открытого видео сохранили в редакторе: выбранная вручную разметка переключается
+            на сохранённую (для разметки рядом с видео — на её текущую версию), зоны перечитываются.
+        """
+        with self._lock:
+            if self.video is None:
+                raise FileNotFoundError("Video is not opened")
+            saved = MarkupChoice(variant)
+            if saved not in (MarkupChoice.SIDECAR, MarkupChoice.PRODUCTION):
+                raise ValueError(f"Unknown markup variant: {variant}")
+            key = str(self.video)
+            if key in self._markup_choices:
+                self._markup_choices[key] = VideoMarkup(variant=saved, file=self._markup_choices[key].file)
+            self._close_collector()
+            self._refresh_markup()
+            self._save_state()
+        return self.video_info()
 
     def set_regions_file(self, path: Path | None) -> dict[str, Any]:
-        """ Задаёт файл зон (None — весь кадр) и сохраняет настройки. """
+        """
+            Явный файл разметки для открытого видео (без видео — для всех видео); None — резать весь кадр.
+        """
         with self._lock:
             self._close_collector()
             if path is None:
@@ -452,9 +527,15 @@ class WebSession:
             else:
                 if not path.is_file():
                     raise FileNotFoundError(f"Regions file not found: {path}")
-                self.config.regions.file = path.resolve()
+                if self.video is not None:
+                    self._markup_choices[str(self.video)] = VideoMarkup(variant=MarkupChoice.FILE,
+                                                                        file=str(path.resolve()))
+                else:
+                    self.config.regions.file = path.resolve()
                 self.config.regions.source = RegionSource.FILE
             save_config(self.config, self.config_path)
+            self._refresh_markup()
+            self._save_state()
         return self.video_info()
 
     def _close_reader(self) -> None:
@@ -469,18 +550,35 @@ class WebSession:
             self._reader = VideoReader(self.video)
         return self._reader
 
+    def _markup_info(self, video: Path) -> dict[str, Any]:
+        """ Разметка видео для интерфейса: что выбрано, что найдено, версии рядом с видео. """
+        store = VersionStore(video)
+        history = store.history()
+        search_dir = self.config.regions.search_dir
+        choice = self._markup_choices.get(str(video)) or VideoMarkup()
+        return {
+            "markup": self._markup.to_dict() if self._markup is not None else None,
+            "markup_choice": choice.model_dump(mode="json"),
+            "markup_file": choice.file or (str(self.config.regions.file) if self.config.regions.file else None),
+            "markup_sidecar": store.working_path.is_file(),
+            "markup_production_key": production_key(video, search_dir),
+            "markup_versions": [{"number": v.number, "created": v.created, "origin": v.origin.value,
+                                 "comment": v.comment, "pinned": v.pinned} for v in history.versions],
+            "markup_current": history.current,
+            "jsons_dir": str(search_dir) if search_dir else "",
+        }
+
     def video_info(self) -> dict[str, Any]:
-        """ Сведения о видео, его зонах и папке датасета. """
+        """ Сведения о видео, его разметке, зонах и папке датасета. """
         with self._lock:
             effective = self.effective_config()
-            regions_file = self.config.regions.file
+            regions_file = self._markup_file()
             info: dict[str, Any] = {
                 "video": str(self.video) if self.video else None,
                 "frame": self.frame,
                 "dataset_dir": str(effective.collection_dir),
                 "regions_file": str(regions_file) if regions_file else None,
                 "regions_source": self.config.regions.source.value,
-                "regions_origin": self._regions_origin(),
             }
             if self.video is None:
                 return info
@@ -489,6 +587,7 @@ class WebSession:
             regions = self.collector().regions_for(first.width, first.height) if first else []
             shapes = self._shape_types()
             info["shapes"] = self.zone_shapes()
+            info.update(self._markup_info(self.video))
             info.update({
                 "name": reader.path.name,
                 "fps": reader.fps,
@@ -497,94 +596,41 @@ class WebSession:
                 "height": first.height if first else 0,
                 "regions": [{"id": r.id, "polygon": [list(p) for p in r.polygon], "shape": shapes.get(r.id, "polygon")}
                             for r in regions],
-                "regions_editable": bool(shapes),
-                "regions_sidecar": str(sidecar_regions_file(self.video)),
                 "regions_warning": self._regions_warning(info["shapes"]),
             })
             return info
 
     def _regions_warning(self, shapes: list[dict[str, Any]]) -> str | None:
-        """ Что не так с разметкой открытого видео: файл от другой камеры или в нём нет нужных зон. """
-        file = self.config.regions.file
-        if self.video is None or self.config.regions.source != RegionSource.FILE or file is None:
+        """ Что не так с разметкой открытого видео: не найдена, файл от другой камеры, нет нужных зон. """
+        if self.video is None or self.config.regions.source != RegionSource.FILE:
             return None
-        if not file.is_file():
-            return f"Файл разметки не найден: {file.name}"
-        video_cam, file_cam = _CAMERA.search(self.video.stem), _CAMERA.search(file.stem)
-        if self._regions_origin() is None and video_cam and file_cam and video_cam.group(1) != file_cam.group(1):
-            return (f"Разметка от камеры {file_cam.group(1)}, а видео — камера {video_cam.group(1)}: "
-                    f"для cam{video_cam.group(1)} файл не найден или их несколько")
+        markup = self._markup
+        if markup is None:
+            choice = self._video_regions(self.video)
+            if choice.variant == MarkupChoice.SIDECAR and choice.version is not None:
+                return f"Версии v{choice.version} разметки рядом с видео нет — режется весь кадр"
+            wanted = _VARIANT_NAMES.get(choice.variant.value, "ни рядом с видео, ни боевая")
+            return f"Разметка не найдена ({wanted}) — режется весь кадр"
+        if not markup.path.is_file():
+            return f"Файл разметки не найден: {markup.path.name}"
+        video_cam, file_cam = _CAMERA.search(self.video.stem), _CAMERA.search(markup.path.stem)
+        if markup.variant == "file" and video_cam and file_cam and video_cam.group(1) != file_cam.group(1):
+            return f"Разметка от камеры {file_cam.group(1)}, а видео — камера {video_cam.group(1)}"
         if not shapes:
             labels = ", ".join(self.config.regions.labels) or "любыми"
-            return f"В {file.name} нет зон с метками {labels}"
-        return None
-
-    def _regions_origin(self) -> RegionsOrigin | None:
-        """ Откуда взят текущий файл зон: рядом с видео или по номеру камеры. """
-        file = self.config.regions.file
-        if self.video is None or file is None or self.config.regions.source != RegionSource.FILE:
-            return None
-        if file == sidecar_regions_file(self.video):
-            return "video"
-        search_dir = self.config.regions.search_dir
-        if search_dir is not None and file == suggest_regions_file(self.video, search_dir):
-            return "camera"
+            return f"В {markup.path.name} нет зон с метками {labels}"
         return None
 
     def _labelme(self) -> LabelMeRegions | None:
-        """ Текущий файл зон (LabelMe), если зоны берутся из файла. """
-        regions = self.config.regions
-        if regions.source != RegionSource.FILE or regions.file is None or not regions.file.is_file():
+        """ Файл разметки открытого видео (LabelMe), если зоны берутся из файла. """
+        file = self._markup_file()
+        if file is None or not file.is_file():
             return None
-        return LabelMeRegions(regions.file, (), regions.where, regions.id_field)
+        return LabelMeRegions(file, (), self.config.regions.where, self.config.regions.id_field)
 
     def _shape_types(self) -> dict[str, str]:
         labelme = self._labelme()
         return labelme.shape_types() if labelme is not None else {}
-
-    def edit_regions(self, edits: dict[str, list[Point]], shapes: dict[str, ShapeKind] | None = None) -> dict[str, Any]:
-        """
-            Применяет исправленные зоны (координаты кадра; shapes — новый тип фигуры, если менялся):
-            файл разметки с ними сохраняется рядом с видео под его именем и становится текущим.
-            Исходный файл не меняется.
-        """
-        with self._lock:
-            if self.video is None:
-                raise FileNotFoundError("Video is not opened")
-            labelme = self._labelme()
-            if labelme is None:
-                raise ValueError("Regions are taken from a LabelMe file only")
-            first = self._get_reader().read(0)
-            if first is None:
-                raise ValueError("Video has no frames")
-            data = labelme.edited(edits, first.width, first.height, shapes)
-            target = sidecar_regions_file(self.video)
-            write_labelme(data, target)
-            self._close_collector()
-            self._use_regions_file(target)
-        return self.video_info()
-
-    def regions_save_target(self) -> Path | None:
-        """ Куда предложить сохранить разметку: файл этой камеры в папке разметки (его можно перезаписать). """
-        if self.video is None:
-            return None
-        search_dir = self.config.regions.search_dir
-        if search_dir is not None:
-            camera_file = suggest_regions_file(self.video, search_dir)
-            return camera_file or search_dir / sidecar_regions_file(self.video).name
-        return self.config.regions.file
-
-    def save_regions_as(self, path: Path) -> Path:
-        """ Сохраняет текущий файл зон в указанный файл (например, в папку разметки камер). """
-        source = self.config.regions.file
-        if self.config.regions.source != RegionSource.FILE or source is None or not source.is_file():
-            raise ValueError("There is no regions file to save")
-        if path.suffix.lower() != ".json":
-            raise ValueError(f"Regions file must be .json: {path}")
-        path = path.resolve()
-        if path != source.resolve():
-            write_labelme(json.loads(source.read_text(encoding="utf-8")), path)
-        return path
 
     def frame_at(self, index: int) -> Frame | None:
         """ Кадр открытого видео. """
@@ -820,14 +866,16 @@ class WebSession:
 
     def config_for_video(self, video: Path) -> CollectorConfig:
         """
-            Настройки для видео: его папка датасета, его файл зон (рядом с видео или по номеру камеры)
-            и выбранные в этой камере зоны.
+            Настройки для видео: его папка датасета, его разметка (см. :meth:`markup_for`)
+            и выбранные в этом файле разметки зоны. Разметки нет — режется весь кадр.
         """
         config = self.config.for_video(video)
-        found = find_regions_file(video, config.regions.search_dir)
-        if found is not None:
-            config.regions.file = found[0]
-            config.regions.source = RegionSource.FILE
+        if config.regions.source == RegionSource.FILE:
+            found = self._markup if video == self.video else self.markup_for(video)
+            if found is not None:
+                config.regions.file = found.path
+            else:
+                config.regions.source = RegionSource.NONE
         return self._with_zones(config)
 
     def stop_auto(self) -> None:
@@ -857,10 +905,8 @@ class WebSession:
 
     def playlist(self) -> dict[str, Any]:
         """ Плейлист для интерфейса: видео, сколько кадров уже сохранено, откуда возьмутся зоны. """
-        search_dir = self.config.regions.search_dir
         items: list[dict[str, Any]] = []
         for video in self.playlist_videos():
-            found = find_regions_file(video, search_dir)
             labels = self._label_counts(video)
             journal = self.config.for_video(video).collection_dir / JOURNAL_DIR / f"{video.stem}.predictions.csv"
             items.append({
@@ -870,10 +916,25 @@ class WebSession:
                 "saved": sum(labels.values()) if labels is not None else None,
                 "labels": labels,
                 "rejected": self._rejections.count(str(video)),
-                "regions": found[1] if found is not None else None,
+                "regions": self._markup_tag(video),
             })
         return {"dir": str(self.playlist_dir) if self.playlist_dir else None, "items": items,
                 "current": str(self.video) if self.video else None}
+
+    def _markup_tag(self, video: Path) -> str | None:
+        """ Чем будет размечено видео в плейлисте: sidecar, production, file; None — разметки нет. """
+        choice = self._markup_choices.get(str(video))
+        variant = choice.variant if choice is not None else self.config.regions.variant
+        sidecar = VersionStore(video).working_path.is_file() or legacy_sidecar_file(video).is_file()
+        if variant in (MarkupChoice.AUTO, MarkupChoice.SIDECAR) and sidecar:
+            return "sidecar"
+        search_dir = self.config.regions.search_dir
+        if variant in (MarkupChoice.AUTO, MarkupChoice.PRODUCTION) and production_key(video, search_dir) is not None:
+            return "production"
+        if variant in (MarkupChoice.AUTO, MarkupChoice.FILE):
+            file = choice.file if choice is not None and choice.file else self.config.regions.file
+            return "file" if file is not None else None
+        return None
 
     def _label_counts(self, video: Path) -> dict[str, int] | None:
         """
