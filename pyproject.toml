@@ -19,6 +19,7 @@ dependencies = [
     "numpy>=1.24",
     "pydantic>=2.5,<3",
     "pyyaml>=6.0",
+    "neuro-markup-lab @ git+https://github.com/omigutin/neuro_markup_lab.git@main",
 ]
 
 [project.optional-dependencies]
@@ -26,7 +27,7 @@ dependencies = [
 # а одновременная установка с opencv-python-headless ломает cv2.
 opencv = ["opencv-python>=4.8"]
 headless = ["opencv-python-headless>=4.8"]
-web = ["fastapi>=0.110", "uvicorn>=0.27", "send2trash>=1.8"]
+web = ["fastapi>=0.110", "uvicorn>=0.27", "send2trash>=1.8", "jinja2>=3.1"]
 
 [project.scripts]
 ndc = "neuro_dataset_collector.cli.main:main"
@@ -45,6 +46,7 @@ httpx = ">=0.27"
 opencv-python-headless = ">=4.8"
 fastapi = ">=0.110"
 uvicorn = ">=0.27"
+jinja2 = ">=3.1"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
