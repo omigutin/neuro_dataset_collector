@@ -51,6 +51,7 @@ function updateStatus() {
   chip.classList.toggle("ok", !!useFile && !info.regions_warning);
   chip.classList.toggle("warn", !!info.regions_warning);
   renderMarkupMenu(info);
+  renderFrameMarkup(info);
   const warning = $("#regions-warning");
   warning.hidden = !info.regions_warning;
   if (info.regions_warning) {
@@ -179,20 +180,48 @@ async function refreshVideo() {
   }
 }
 
-// Путь видео в плейлисте: подпапки и имя файла.
-function videoParts(info) {
-  const item = state.playlist.items.find((it) => it.path === info.video);
-  const parts = item ? item.name.split(/[\\/]/) : [info.name];
-  const root = state.playlist.dir ? fileName(state.playlist.dir.replace(/[\\/]+$/, "")) : null;
-  return (root ? [root] : []).concat(parts);
+// ---------------------------------------------------------------- разметка поверх кадра
+
+// Переключатель «Боевая | Рядом с видео» и версия разметки рядом с видео — как в neuro_markup_lab.
+function renderFrameMarkup(info) {
+  const box = $("#frame-markup");
+  const has = hasVideo();
+  box.hidden = !has || autoRunning();
+  $("#edit-markup").hidden = !has || autoRunning();
+  if (!has) return;
+  const markup = info.regions_source === "file" ? info.markup : null;
+  const variant = markup ? markup.variant : null;
+  $$("[data-frame-markup]").forEach((button) => {
+    const v = button.dataset.frameMarkup;
+    const available = v === "sidecar" ? !!info.markup_sidecar : !!info.markup_production_key;
+    button.disabled = !available;
+    button.classList.toggle("active", variant === v);
+    button.title = v === "production"
+      ? (info.markup_production_key ? `Боевая разметка: ${info.markup_production_key}` : "Боевая разметка не найдена в каталоге JSON")
+      : (info.markup_sidecar ? "Разметка рядом с видео (версии)" : "Разметки рядом с видео нет — создайте её в редакторе");
+  });
+  const version = $("#frame-version");
+  version.hidden = variant !== "sidecar";
+  if (variant === "sidecar") version.textContent = markup.version ? `v${markup.version} ▾` : "вне версий ▾";
+  const file = $("#frame-file");
+  file.hidden = variant !== "file";
+  if (variant === "file") { file.textContent = `Файл: ${fileName(markup.path)}`; file.title = markup.path; }
 }
 
-function renderCrumbs() {
-  const info = state.info;
-  if (!info || !info.video) { $("#crumbs").innerHTML = `<span>${state.playlist.dir ? escapeHtml(state.playlist.dir) : "видео не открыто"}</span>`; return; }
-  const parts = videoParts(info);
-  $("#crumbs").innerHTML = parts.map((p, i) => (i === parts.length - 1 ? `<b>${escapeHtml(p)}</b>` : `<span>${escapeHtml(p)}</span><span class="sep">/</span>`)).join("");
-  $("#crumbs").title = info.video;
+function toggleFrameVersions(event) {
+  event.stopPropagation();
+  const info = state.info || {};
+  const versions = info.markup_versions || [];
+  const chosen = info.markup_choice && info.markup_choice.variant === "sidecar" ? info.markup_choice.version : null;
+  const current = info.markup_current;
+  const list = $("#frame-versions");
+  list.innerHTML = `<div class="menu-head">Версия разметки рядом с видео</div>`
+    + `<button type="button" data-frame-version="" class="${chosen ? "" : "active"}">Текущая${current ? ` (v${current})` : ""}</button>`
+    + versions.slice().reverse().map((v) => `<button type="button" data-frame-version="${v.number}" class="${chosen === v.number ? "active" : ""}">
+        v${v.number}${v.number === current ? " · текущая" : ""}${v.comment ? ` · ${escapeHtml(v.comment)}` : ""}</button>`).join("");
+  const open = list.hidden;
+  closeMenus();
+  list.hidden = !open;
 }
 
 async function applyVideo(info, frame) {
@@ -205,7 +234,6 @@ async function applyVideo(info, frame) {
     await loadConfig();
   }
   const has = hasVideo();
-  renderCrumbs();
   updateStatus();
   $("#video-title").textContent = has ? info.name : "Видео не открыто";
   $("#video-title").title = info.video || "";
@@ -258,8 +286,7 @@ function renderZones() {
   box.innerHTML = shapes.map((s) => `<label class="zone-row ${s.selected ? "" : "off"}" title="${escapeHtml(s.label)}">
       <input type="checkbox" data-zone="${escapeHtml(s.id)}" ${s.selected ? "checked" : ""}>
       <span class="zname"><b>Зона ${escapeHtml(s.id)}</b> ${s.label && s.label !== s.id ? `<span class="muted">${escapeHtml(s.label)}</span>` : ""}</span>
-      ${s.selected ? answerChip(answerFor(s.id)) : `<span class="muted small">не режем</span>`}</label>`).join("") + error
-    + `<p class="hint">Галочка или щелчок по зоне на кадре — резать её или нет. Запоминается для камеры.</p>`;
+      ${s.selected ? answerChip(answerFor(s.id)) : `<span class="muted small">не режем</span>`}</label>`).join("") + error;
 }
 
 async function setZones(ids) {
@@ -357,8 +384,6 @@ function showFrame(index) {
   $("#frame-number").value = index;
   const fps = state.info.fps || 25;
   $("#time").textContent = `${fmtTime(index / fps)} / ${fmtTime(state.info.frames / fps)}`;
-  $("#frame-badge").hidden = false;
-  $("#frame-badge").textContent = `Кадр ${index} · ${fmtTime(index / fps)}`;
   const model = modelOn() ? 1 : 0;
   const zones = state.showZones ? 1 : 0;
   $("#frame").src = `api/video/frame/${index}?zones=${zones}&model=${model}&t=${Date.now()}`;
@@ -394,7 +419,6 @@ async function loadAnswersError() {
 
 function play() {
   if (!hasVideo()) return;
-  if ($("#step-mode").checked) { showFrame(state.frame + step()); return; }
   state.playing = true;
   $("#play").textContent = "❚❚";
   if (!state.loading) showFrame(state.frame + step());
@@ -417,7 +441,8 @@ async function saveCurrent(label, force, onlyRegions) {
     loadGroup(state.info.video);
     loadRecent();
     loadTimeline();
-    if ($("#step-mode").checked) showFrame(state.frame + step());
+    // После сохранения — сразу следующий шаг.
+    showFrame(state.frame + step());
   } catch (error) {
     toast(error.message, "bad");
   }
@@ -476,6 +501,12 @@ function bindPlayer() {
   $("#markup-version").onchange = (event) => setMarkup("sidecar", Number(event.target.value) || null);
   $("#open-markup-editor").onclick = openMarkupEditor;
   $("#edit-markup").onclick = openMarkupEditor;
+  $$("[data-frame-markup]").forEach((button) => (button.onclick = () => setMarkup(button.dataset.frameMarkup)));
+  $("#frame-version").onclick = toggleFrameVersions;
+  $("#frame-versions").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-frame-version]");
+    if (button) setMarkup("sidecar", Number(button.dataset.frameVersion) || null);
+  });
   document.addEventListener("nml:saved", onMarkupSaved);
   $("#no-regions").onclick = noRegions;
   $("#regions-chip").onclick = (event) => { event.stopPropagation(); toggleMenu("#regions-menu"); };

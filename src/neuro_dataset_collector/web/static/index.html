@@ -29,13 +29,23 @@
   <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></symbol>
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
   <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v5h7M8 21v-7h8v7"/></symbol>
+  <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 5h16l-6 7v6l-4 2v-8z"/></symbol>
   <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
 </svg>
 
 <header class="topbar">
-  <a id="back-link" class="btn ghost" hidden>←</a>
-  <div class="brand"><span class="logo"><svg><use href="#i-cut"/></svg></span><span>Сборщик датасета</span></div>
-  <nav id="crumbs" class="crumbs" aria-label="Путь"></nav>
+  <div class="source">
+    <a id="back-link" class="btn ghost" hidden>←</a>
+    <div class="source-main">
+      <label for="playlist-path" class="source-label">Каталог видео</label>
+      <div class="source-row">
+        <input id="playlist-path" placeholder="Папка с видео — вставьте путь или нажмите «Выбрать»" autocomplete="off" spellcheck="false">
+        <button id="pick-folder" class="btn" type="button">Выбрать</button>
+        <button id="pick-video" class="btn ghost" type="button" title="Открыть одно видео (списком станет его папка)"><svg class="ic"><use href="#i-film"/></svg>Видео…</button>
+      </div>
+      <label class="check small"><input type="checkbox" id="playlist-recursive"> Искать видео в подкаталогах</label>
+    </div>
+  </div>
   <div class="status">
     <div class="menu">
       <button id="regions-chip" class="status-chip" type="button" title="Откуда берутся зоны"><span class="dot"></span><span class="txt">Разметка: —</span></button>
@@ -98,30 +108,22 @@
   <!-- ================= Нарезка ================= -->
   <section id="view-cut" class="view view-cut">
     <aside class="pane">
-      <div class="pane-head">
-        <h2>Видео <span id="playlist-count" class="muted"></span></h2>
-        <span class="buttons">
-          <button id="pick-folder" class="btn small" type="button"><svg class="ic"><use href="#i-folder"/></svg>Папка…</button>
-          <button id="pick-video" class="btn small" type="button"><svg class="ic"><use href="#i-film"/></svg>Файл…</button>
-        </span>
-      </div>
-      <div id="playlist-dir" class="path muted">папка не выбрана</div>
-      <label class="search"><svg class="ic"><use href="#i-search"/></svg><input id="playlist-filter" placeholder="Поиск по имени" autocomplete="off"></label>
-      <div class="row">
-        <div id="playlist-show" class="segmented small" role="group" aria-label="Какие видео показывать">
-          <button type="button" data-show="all" class="active">Все</button>
-          <button type="button" data-show="new">Не начаты</button>
-          <button type="button" data-show="done">С кадрами</button>
+      <div class="list-tools">
+        <label class="search"><svg class="ic"><use href="#i-search"/></svg><input id="playlist-filter" placeholder="Поиск по имени" autocomplete="off"></label>
+        <div class="menu">
+          <button id="playlist-filter-btn" class="tool" type="button" aria-label="Какие видео показывать" title="Какие видео показывать"><svg class="ic"><use href="#i-filter"/></svg></button>
+          <div id="playlist-show" class="menu-list" hidden>
+            <div class="menu-head">Показывать</div>
+            <button type="button" data-show="all" class="active">Все видео</button>
+            <button type="button" data-show="new">Не начатые</button>
+            <button type="button" data-show="done">С сохранёнными кадрами</button>
+          </div>
         </div>
-        <span class="spacer"></span>
-        <button id="refresh-playlist" class="btn small icon-only" type="button" aria-label="Перечитать папку" title="Перечитать папку"><svg class="ic"><use href="#i-refresh"/></svg></button>
+        <button id="refresh-playlist" class="tool" type="button" aria-label="Перечитать папку" title="Перечитать папку"><svg class="ic"><use href="#i-refresh"/></svg></button>
       </div>
+      <div class="list-caption"><span id="playlist-count" class="muted small"></span><span id="playlist-filter-note" class="muted small"></span></div>
       <div id="playlist" class="scroll"></div>
-      <div class="row pane-foot">
-        <button id="prev-video" class="btn small" type="button"><svg class="ic"><use href="#i-prev"/></svg>Пред.</button>
-        <button id="next-video" class="btn small" type="button">След.<svg class="ic"><use href="#i-next"/></svg></button>
-        <span class="muted small">PageUp / PageDown</span>
-      </div>
+      <div class="pane-foot muted small"><kbd>PageUp</kbd> — предыдущее видео · <kbd>PageDown</kbd> — следующее</div>
     </aside>
 
     <main class="stage">
@@ -135,14 +137,22 @@
           <button id="show-zones" type="button" class="active" aria-pressed="true">Зоны</button>
           <button id="show-model" type="button" aria-pressed="false" title="Ответы модели на кадре (Alt+M)">Ответы модели</button>
         </div>
-        <button id="edit-markup" class="btn small" type="button" title="Редактор разметки: правка зон, версии рядом с видео, боевая"><svg class="ic"><use href="#i-edit"/></svg>Редактор разметки</button>
       </div>
       <div id="regions-warning" class="warning" hidden></div>
       <div class="frame-wrap">
         <img id="frame" alt="">
         <img id="auto-frame" alt="" hidden>
         <div id="auto-overlay" class="auto-overlay" hidden></div>
-        <div id="frame-badge" class="frame-badge" hidden></div>
+        <div id="frame-markup" class="frame-markup" hidden>
+          <div class="nml-variant-switch" role="group" aria-label="Разметка для нарезки">
+            <button type="button" data-frame-markup="production" class="nml-v-production">Боевая</button>
+            <button type="button" data-frame-markup="sidecar" class="nml-v-sidecar">Рядом с видео</button>
+            <button type="button" id="frame-version" class="nml-ver-seg" hidden></button>
+            <span id="frame-file" class="frame-file" hidden></span>
+          </div>
+          <div id="frame-versions" class="menu-list" hidden></div>
+        </div>
+        <button id="edit-markup" type="button" class="nml-preview-edit" title="Редактор разметки" aria-label="Редактор разметки">✎</button>
       </div>
       <div id="frame-placeholder" class="placeholder">
         <svg class="big"><use href="#i-film"/></svg>
@@ -156,8 +166,6 @@
         <button id="prev" class="btn icon-only" type="button" aria-label="Шаг назад" title="Шаг назад (←)"><svg class="ic"><use href="#i-prev"/></svg></button>
         <button id="play" class="btn primary icon-only" type="button" aria-label="Воспроизведение" title="Воспроизведение / пауза (пробел)">▶</button>
         <button id="next" class="btn icon-only" type="button" aria-label="Шаг вперёд" title="Шаг вперёд (→)"><svg class="ic"><use href="#i-next"/></svg></button>
-        <span id="time" class="mono muted">0:00.0 / 0:00.0</span>
-        <label class="inline">Кадр <input type="number" id="frame-number" min="0" class="short"></label>
         <label class="inline">Шаг
           <select id="step">
             <option value="1">1 кадр</option><option value="2">2 кадра</option><option value="5">5 кадров</option>
@@ -167,8 +175,14 @@
         <label class="inline">Скорость
           <select id="speed"><option value="0.5">×0.5</option><option value="1" selected>×1</option><option value="2">×2</option><option value="4">×4</option><option value="8">×8</option></select>
         </label>
-        <label class="inline check"><input type="checkbox" id="step-mode"> после сохранения — следующий шаг</label>
+        <span class="spacer"></span>
+        <label class="inline">Кадр <input type="number" id="frame-number" min="0" class="short"></label>
+        <span id="time" class="mono muted">0:00.0 / 0:00.0</span>
       </div>
+      <section id="zones-panel" class="zones-panel">
+        <div class="sec-head"><h3>Зоны на кадре</h3><span class="muted small">галочка или щелчок по зоне на кадре — резать её или нет; запоминается для камеры</span></div>
+        <div id="zones" class="zones"></div>
+      </section>
       <div class="timeline" id="timeline">
         <div class="tl-row"><span class="tl-name">Модель <select id="tl-zone" title="Зона"></select></span><div id="tl-model" class="tl-track"></div></div>
         <div class="tl-row"><span class="tl-name">Сохранено</span><div id="tl-saved" class="tl-track"></div></div>
@@ -179,10 +193,6 @@
     </main>
 
     <aside class="pane inspector">
-      <section>
-        <div class="sec-head"><h3>Зоны на кадре</h3><span class="muted small">резать · ответ модели</span></div>
-        <div id="zones" class="zones"></div>
-      </section>
       <section>
         <div class="sec-head"><h3>Сохранить кадр</h3><button id="edit-classes" class="btn small ghost" type="button">Классы и клавиши…</button></div>
         <p class="hint">Клавиша или кнопка — сохранить отмеченные зоны в класс. Shift — даже если похож на уже сохранённый.</p>

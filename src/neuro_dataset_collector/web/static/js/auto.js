@@ -98,7 +98,8 @@ function showAutoView(on) {
   $("#frame").hidden = on;
   if (on) { $("#frame-placeholder").hidden = true; $(".view-cut .frame-wrap").hidden = false; }
   $(".view-cut .stage").classList.toggle("auto-running", on);
-  $("#edit-markup").disabled = on || !hasVideo();
+  $("#edit-markup").hidden = on || !hasVideo();
+  $("#frame-markup").hidden = on || !hasVideo();
   if (on && !wasOn) nextAutoFrame();
 }
 

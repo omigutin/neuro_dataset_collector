@@ -33,13 +33,26 @@ async function openVideo(path) {
 
 async function chooseFolder() {
   const path = await pickPath("dir", null, state.playlist.dir || (state.info && state.info.video), "Папка с видео");
-  if (!path) return;
+  if (path) await setFolder(path);
+}
+
+// Папка с видео: из окна выбора или вставленная в поле «Каталог видео».
+async function setFolder(path) {
   try {
-    state.playlist = await api("POST", "api/playlist", { path });
+    state.playlist = await api("POST", "api/playlist", { path, recursive: $("#playlist-recursive").checked });
     renderPlaylist();
     if (!state.playlist.items.length) { toast("В папке нет видео", "bad"); return; }
     const inList = state.playlist.items.some((item) => item.path === (state.info && state.info.video));
     if (!inList) await openVideo(state.playlist.items[0].path);
+  } catch (error) {
+    toast(error.message, "bad");
+  }
+}
+
+async function setRecursive() {
+  try {
+    state.playlist = await api("POST", "api/playlist", { path: state.playlist.dir, recursive: $("#playlist-recursive").checked });
+    renderPlaylist();
   } catch (error) {
     toast(error.message, "bad");
   }
@@ -61,16 +74,21 @@ function splitName(name) {
 }
 
 const playlistView = { show: "all" };
-const REGION_TAGS = { sidecar: "разметка рядом с видео", production: "боевая разметка", file: "явный файл разметки" };
+const SHOW_NOTES = { all: "", new: "только не начатые", done: "только с кадрами" };
+const MARK_TITLES = { sidecar: "разметка рядом с видео", production: "боевая разметка", file: "явный файл разметки" };
 
 function renderPlaylist() {
   const current = state.info && state.info.video;
   const autoVideo = autoRunning() ? state.auto.video_path : null;
   const filter = $("#playlist-filter").value.trim().toLowerCase();
   const items = state.playlist.items;
-  $("#playlist-dir").textContent = state.playlist.dir || "папка не выбрана";
-  $("#playlist-dir").title = state.playlist.dir || "";
-  $("#playlist-count").textContent = items.length ? `· ${items.length}` : "";
+  const input = $("#playlist-path");
+  if (document.activeElement !== input) input.value = state.playlist.dir || "";
+  input.title = state.playlist.dir || "";
+  $("#playlist-recursive").checked = state.playlist.recursive !== false;
+  $("#playlist-count").textContent = state.playlist.dir ? `Видео: ${items.length}` : "";
+  $("#playlist-filter-note").textContent = SHOW_NOTES[playlistView.show];
+  $("#playlist-filter-btn").classList.toggle("on", playlistView.show !== "all");
   const groups = new Map();
   items.forEach((item, index) => {
     if (filter && !item.name.toLowerCase().includes(filter)) return;
@@ -93,27 +111,25 @@ function renderPlaylist() {
     entries.forEach(({ item, index, file }) => {
       const labels = Object.entries(item.labels || {});
       const total = labels.reduce((sum, [, n]) => sum + n, 0);
-      const bar = labels.map(([name, n]) => `<span style="width:${(100 * n) / Math.max(1, total)}%;background:${classColor(name === state.config.unsorted_label ? "" : name)}" title="${escapeHtml(name)}: ${n}"></span>`).join("");
-      const tags = [
-        item.journal ? `<span class="tag blue">журнал модели</span>` : "",
-        REGION_TAGS[item.regions] ? `<span class="tag">${REGION_TAGS[item.regions]}</span>` : "",
-        item.rejected ? `<span class="tag red">отказов ${item.rejected}</span>` : "",
+      const bar = total ? `<span class="pl-bar">${labels.map(([name, n]) => `<span style="width:${(100 * n) / total}%;background:${classColor(name === state.config.unsorted_label ? "" : name)}"></span>`).join("")}</span>` : "";
+      const marks = [
+        item.regions ? `<span class="pl-mark ${escapeHtml(item.regions)}" title="${MARK_TITLES[item.regions] || ""}"></span>` : "",
+        item.journal ? `<span class="pl-mark journal" title="есть журнал модели"></span>` : "",
+        item.rejected ? `<span class="pl-mark rejected" title="отказов: ${item.rejected}"></span>` : "",
       ].join("");
+      const detail = labels.map(([name, n]) => `${name}: ${n}`).join(", ");
       const classes = ["pl-item", item.path === current ? "current" : "", item.path === autoVideo ? "auto" : ""].join(" ");
-      html.push(`<div class="${classes}" data-index="${index}" title="${escapeHtml(item.path)}" role="button" tabindex="0">
-        <div class="pl-top"><span class="pl-name">${escapeHtml(file)}</span>
-          <span class="pl-count" title="Сохранено кадров">${item.saved || "—"}</span>
-          ${item.saved ? `<button class="pl-folder" type="button" data-folder="${index}" title="Открыть папку с кадрами" aria-label="Открыть папку с кадрами"><svg class="ic"><use href="#i-folder"/></svg></button>` : ""}</div>
-        ${total ? `<div class="bar">${bar}</div>` : ""}
-        ${tags ? `<div class="pl-tags">${tags}</div>` : ""}</div>`);
+      html.push(`<div class="${classes}" data-index="${index}" title="${escapeHtml(item.path)}${detail ? `\n${escapeHtml(detail)}` : ""}" role="button" tabindex="0">
+        <span class="pl-name">${escapeHtml(file)}</span><span class="pl-marks">${marks}</span>${bar}
+        <span class="pl-count">${item.saved || ""}</span>
+        <button class="pl-folder" type="button" data-folder="${index}" title="Открыть папку с кадрами" aria-label="Открыть папку с кадрами" ${item.saved ? "" : "hidden"}><svg class="ic"><use href="#i-folder"/></svg></button></div>`);
     });
   });
   $("#playlist").innerHTML = html.join("")
     || (state.playlist.dir ? `<p class="muted">${filter || playlistView.show !== "all" ? "ничего не найдено" : "видео не найдено"}</p>`
-      : `<p class="muted">Выберите папку с видео — «Папка…»</p>`);
+      : `<p class="muted">Укажите каталог видео вверху</p>`);
   const active = $("#playlist .pl-item.current");
   if (active) active.scrollIntoView({ block: "nearest" });
-  renderCrumbs();
   renderHistory();
 }
 
@@ -152,14 +168,21 @@ function stepVideo(delta) {
 function bindPlaylist() {
   $("#pick-folder").onclick = chooseFolder;
   $("#pick-video").onclick = chooseVideo;
-  $("#prev-video").onclick = () => stepVideo(-1);
-  $("#next-video").onclick = () => stepVideo(1);
   $("#refresh-playlist").onclick = loadPlaylist;
+  $("#playlist-recursive").onchange = setRecursive;
+  $("#playlist-path").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); const path = event.target.value.trim(); if (path) setFolder(path); }
+  });
+  $("#playlist-filter-btn").onclick = (event) => { event.stopPropagation(); toggleMenu("#playlist-show"); };
+  $("#playlist").addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && event.target.closest(".pl-item")) onPlaylistClick(event);
+  });
   $("#playlist").addEventListener("click", onPlaylistClick);
   $("#playlist-filter").addEventListener("input", renderPlaylist);
   $$("#playlist-show button").forEach((b) => (b.onclick = () => {
     playlistView.show = b.dataset.show;
     $$("#playlist-show button").forEach((x) => x.classList.toggle("active", x === b));
+    closeMenus();
     renderPlaylist();
   }));
   document.addEventListener("click", (event) => {
