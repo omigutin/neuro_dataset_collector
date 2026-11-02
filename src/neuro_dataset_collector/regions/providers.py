@@ -229,8 +229,7 @@ def create_region_provider(config: RegionsConfig, api_regions: Sequence[Region] 
         return FullFrameRegions()
     if config.source == RegionSource.API:
         return StaticRegions(api_regions or [])
-    assert config.file is not None
-    if not config.file.exists():
+    if config.file is None or not config.file.exists():
         if config.fallback_to_full_frame:
             _log.warning("Regions file %s not found, the whole frame will be saved", config.file)
             return FullFrameRegions()

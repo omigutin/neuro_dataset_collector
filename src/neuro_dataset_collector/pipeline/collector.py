@@ -20,12 +20,14 @@ from ..config.models import (
     DedupScope,
     DuplicatePolicy,
     PredictionsSpace,
+    RegionSource,
     TaskType,
 )
 from ..consistency.tracker import FlipAction, FlipDecision, StreamConsistency
 from ..core.results import RejectReason, SaveResult, SaveStatus
 from ..core.types import Frame, Prediction, Region, SampleStatus, SaveMode, top_prediction
 from ..imaging.crop import Crop, crop_region, predictions_to_crop
+from ..regions.markup import MarkupInfo, describe_markup
 from ..regions.providers import RegionProvider, create_region_provider
 from ..selectors.base import Candidate, Rejection
 from ..selectors.limits import DedupRule, build_limits, check_limits, commit_limits
@@ -87,6 +89,9 @@ class Collector:
         self._catalog = catalog or Catalog(config.catalog.root)
         collection = config.catalog.collection
         self._provider = region_provider or create_region_provider(config.regions, regions)
+        self._markup = self._describe_markup(config) if region_provider is None and not regions else None
+        # Хэш считается один раз: зоны прочитаны при создании сборщика, изменения файла позже на них не влияют
+        self._markup_hash = self._markup.hash if self._markup is not None else None
         self._planner = PathPlanner(config, self._catalog.filenames(collection))
         self._writer = FileWriter(config.runtime.async_write, config.runtime.queue_size)
         self._disk = DiskGuard(config.catalog.root, config.storage.min_free_gb)
@@ -129,6 +134,19 @@ class Collector:
     def session_id(self) -> int:
         """ Номер сеанса в каталоге. """
         return self._session_id
+
+    @property
+    def markup(self) -> MarkupInfo | None:
+        """ Разметка, по которой режутся кадры; None — зоны не из файла разметки. """
+        return self._markup
+
+    @staticmethod
+    def _describe_markup(config: CollectorConfig) -> MarkupInfo | None:
+        regions = config.regions
+        if regions.source != RegionSource.FILE or regions.file is None or not regions.file.is_file():
+            return None
+        video = config.source.path if config.source.path is not None and config.source.path.is_file() else None
+        return describe_markup(regions.file, video, regions.search_dir)
 
     def add_listener(self, listener: Callable[[SaveResult], None]) -> None:
         """ Подписка на каждый результат сохранения (для интерфейсов и логов). """
@@ -455,6 +473,7 @@ class Collector:
             label_path = self._planner.label_path(path)
             label_text = yolo_lines(candidate.predictions, config.classes, pending.crop.width,
                                     pending.crop.height, config.task)
+        markup = self._markup
         record = SampleRecord(
             collection=config.catalog.collection,
             task=config.task.value,
@@ -477,6 +496,10 @@ class Collector:
             predictions=[p.to_dict() for p in candidate.predictions],
             attrs={**frame.attrs, **(dict(pending.region.attrs) if pending.region else {})},
             session_id=self._session_id,
+            markup_variant=markup.variant if markup else None,
+            markup_path=str(markup.path) if markup else None,
+            markup_version=markup.version if markup else None,
+            markup_hash=self._markup_hash,
         )
         sample_id = self._catalog.add(record)
         job = WriteJob(path, candidate.image, config.storage.image_format, config.storage.jpeg_quality,

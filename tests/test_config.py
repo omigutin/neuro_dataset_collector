@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from neuro_dataset_collector.config import (
     CollectorConfig,
+    MarkupChoice,
     RuntimeProfile,
     dump_config,
     load_config,
@@ -61,9 +62,15 @@ def test_production_profile_defaults() -> None:
     assert config.runtime.max_saves_per_hour == 300
 
 
-def test_file_regions_need_path() -> None:
+def test_explicit_file_regions_need_path() -> None:
     with pytest.raises(ValidationError):
-        CollectorConfig.model_validate({"regions": {"source": "file"}})
+        CollectorConfig.model_validate({"regions": {"source": "file", "variant": "file"}})
+
+
+def test_video_markup_needs_no_path() -> None:
+    config = CollectorConfig.model_validate({"regions": {"source": "file"}})
+    assert config.regions.variant == MarkupChoice.AUTO
+    assert config.regions.file is None
 
 
 def test_roundtrip_and_relative_paths(tmp_path: Path) -> None:

@@ -16,6 +16,7 @@ from ..export.roboflow import export_dataset
 from ..pipeline.collector import Collector
 from ..pipeline.offline import collect_videos
 from ..predictors.base import create_predictor
+from ..regions.markup import uses_video_markup, with_video_markup
 from ..review.sync import sync_collection
 from ..sources.video import list_videos
 from ..web import DEFAULT_PORT
@@ -56,8 +57,11 @@ def _cmd_collect(args: argparse.Namespace) -> int:
         return 1
     videos = list_videos(config.source.path, config.source.extensions, config.source.recursive)
     predictor = create_predictor(config.model, config.task)
-    # Без next_to_video — один сборщик на все видео; иначе у каждого видео своя папка и своя история.
-    groups = [(config, videos)] if not config.catalog.next_to_video else [(config.for_video(v), [v]) for v in videos]
+    # Один сборщик на все видео, если у них общая папка и общая разметка; иначе — свой сборщик на каждое видео
+    if config.catalog.next_to_video or uses_video_markup(config.regions):
+        groups = [(with_video_markup(config.for_video(v), v), [v]) for v in videos]
+    else:
+        groups = [(config, videos)]
     try:
         for video_config, group in groups:
             with Collector(video_config) as collector:

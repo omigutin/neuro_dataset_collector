@@ -28,6 +28,7 @@ __all__ = [
     "LabelOverride",
     "Limit",
     "ManualConfig",
+    "MarkupChoice",
     "ModelConfig",
     "PredictionsSpace",
     "QuotaLimit",
@@ -64,6 +65,15 @@ class RegionSource(str, Enum):
     NONE = "none"
     FILE = "file"
     API = "api"
+
+
+class MarkupChoice(str, Enum):
+    """ Какую разметку видео брать при ``regions.source = file``. """
+
+    AUTO = "auto"              # рядом с видео, иначе боевая из search_dir, иначе regions.file
+    SIDECAR = "sidecar"        # рядом с видео: <имя>.markup.json (версии — в <имя>_jsons/)
+    PRODUCTION = "production"  # боевая: файл из search_dir, подобранный по имени и пути видео
+    FILE = "file"              # явный файл regions.file
 
 
 class DedupScope(str, Enum):
@@ -137,6 +147,10 @@ class RegionsConfig(_Model):
     """ Настройки зон для вырезки. """
 
     source: RegionSource = RegionSource.NONE
+    # Какую разметку видео брать: auto — рядом с видео, иначе боевая, иначе file
+    variant: MarkupChoice = MarkupChoice.AUTO
+    # Версия разметки рядом с видео для нарезки; None — текущая
+    version: int | None = Field(default=None, ge=1)
     file: Path | None = None
     labels: list[str] = Field(default_factory=list)
     # Только эти зоны (номера зон); пусто — все подходящие по меткам.
@@ -159,9 +173,9 @@ class RegionsConfig(_Model):
 
     @model_validator(mode="after")
     def _check_file(self) -> RegionsConfig:
-        """ Для источника 'file' путь к файлу обязателен. """
-        if self.source == RegionSource.FILE and self.file is None:
-            raise ValueError("regions.file is required when regions.source is 'file'")
+        """ Для явного файла разметки (variant: file) путь обязателен. """
+        if self.source == RegionSource.FILE and self.variant == MarkupChoice.FILE and self.file is None:
+            raise ValueError("regions.file is required when regions.variant is 'file'")
         return self
 
 

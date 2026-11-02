@@ -49,7 +49,11 @@ CREATE TABLE IF NOT EXISTS samples (
     session_id INTEGER,
     created_at TEXT NOT NULL,
     reviewed_at TEXT,
-    exported_at TEXT
+    exported_at TEXT,
+    markup_variant TEXT,
+    markup_path TEXT,
+    markup_version INTEGER,
+    markup_hash TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_samples_collection ON samples(collection, status);
 CREATE TABLE IF NOT EXISTS label_history (
@@ -75,7 +79,15 @@ CREATE TABLE IF NOT EXISTS exports (
 _COLUMNS = (
     "id, collection, task, path, label, model_label, proposed_label, confidence, status, mode, trigger, source, "
     "frame_index, timestamp, region_id, region_json, hash, width, height, predictions_json, attrs_json, session_id, "
-    "created_at, reviewed_at, exported_at"
+    "created_at, reviewed_at, exported_at, markup_variant, markup_path, markup_version, markup_hash"
+)
+
+# Столбцы, добавленные после первой версии базы: старые базы дополняются при открытии
+_ADDED_COLUMNS = (
+    ("markup_variant", "TEXT"),
+    ("markup_path", "TEXT"),
+    ("markup_version", "INTEGER"),
+    ("markup_hash", "TEXT"),
 )
 
 # Отклонённые человеком кадры остаются в индексе, чтобы тот же мусор не собирался снова.
@@ -127,6 +139,11 @@ class SampleRecord:
     predictions: list[dict[str, object]] = field(default_factory=list)
     attrs: dict[str, AttrValue] = field(default_factory=dict)
     session_id: int | None = None
+    # Разметка, по которой вырезан кадр: вариант (sidecar/production/file), путь, версия, хэш файла
+    markup_variant: str | None = None
+    markup_path: str | None = None
+    markup_version: int | None = None
+    markup_hash: str | None = None
     created_at: str = field(default_factory=_now)
     reviewed_at: str | None = None
     exported_at: str | None = None
@@ -150,6 +167,7 @@ class Catalog:
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.executescript(_SCHEMA)
+            self._add_missing_columns()
             self._conn.commit()
         self._indexes: dict[str, HashIndex] = {}
         self._load_indexes()
@@ -169,6 +187,13 @@ class Catalog:
 
     def __exit__(self, *_: object) -> None:
         self.close()
+
+    def _add_missing_columns(self) -> None:
+        """ Дополняет базу прежней версии новыми столбцами. """
+        existing = {row["name"] for row in self._conn.execute("PRAGMA table_info(samples)")}
+        for name, kind in _ADDED_COLUMNS:
+            if name not in existing:
+                self._conn.execute(f"ALTER TABLE samples ADD COLUMN {name} {kind}")
 
     def _load_indexes(self) -> None:
         """ Загружает отпечатки всех действующих записей в память. """
@@ -209,7 +234,7 @@ class Catalog:
         """ Добавляет запись и её отпечаток; возвращает id. """
         with self._lock:
             cursor = self._conn.execute(
-                f"INSERT INTO samples ({_COLUMNS}) VALUES ({','.join('?' for _ in range(25))})",
+                f"INSERT INTO samples ({_COLUMNS}) VALUES ({','.join('?' for _ in range(29))})",
                 (
                     None, record.collection, record.task, record.path, record.label, record.model_label,
                     record.proposed_label, record.confidence, record.status.value, record.mode.value,
@@ -219,6 +244,7 @@ class Catalog:
                     json.dumps(record.predictions, ensure_ascii=False),
                     json.dumps(record.attrs, ensure_ascii=False),
                     record.session_id, record.created_at, record.reviewed_at, record.exported_at,
+                    record.markup_variant, record.markup_path, record.markup_version, record.markup_hash,
                 ),
             )
             self._conn.commit()
@@ -255,6 +281,10 @@ class Catalog:
             created_at=row["created_at"],
             reviewed_at=row["reviewed_at"],
             exported_at=row["exported_at"],
+            markup_variant=row["markup_variant"],
+            markup_path=row["markup_path"],
+            markup_version=row["markup_version"],
+            markup_hash=row["markup_hash"],
         )
 
     def get(self, sample_id: int) -> SampleRecord | None:
