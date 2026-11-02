@@ -865,7 +865,7 @@ web = ["fastapi (>=0.110)", "jinja2 (>=3.1)", "uvicorn (>=0.27)"]
 type = "git"
 url = "https://github.com/omigutin/neuro_markup_lab.git"
 reference = "main"
-resolved_reference = "0b3b5dac18c0b84aef7bf893c0c90e4ac1d194a3"
+resolved_reference = "cd0a73490ed1deee089e84fa699570f426c97703"
 
 [[package]]
 name = "numpy"
