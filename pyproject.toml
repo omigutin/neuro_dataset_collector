@@ -20,6 +20,8 @@ dependencies = [
     "pydantic>=2.5,<3",
     "pyyaml>=6.0",
     "neuro-markup-lab @ git+https://github.com/omigutin/neuro_markup_lab.git@main",
+    # Настоящая частота кадров видео и автоустановка ffmpeg/ffprobe.
+    "true-fps @ git+https://github.com/omigutin/true_fps.git@main",
 ]
 
 [project.optional-dependencies]

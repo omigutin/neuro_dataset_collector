@@ -26,10 +26,12 @@ from pydantic import BaseModel, ValidationError
 from .. import __version__
 from ..config.models import NAME_PATTERN, MarkupChoice, dataset_dir_for_video
 from ..journal.table import JournalFilter
+from ..sources.video_tools import VIDEO_TOOLS_DIR, prepare_video_tools
 from . import DEFAULT_PORT
 from .markup_host import CollectorMarkupHost
 from .picker import pick_path
 from .session import AutoMode, AutoScope, WebSession
+from .state import app_dir
 
 __all__ = ["APP_ID", "MARKUP_PREFIX", "create_app", "find_port", "mount_app", "run"]
 
@@ -537,6 +539,7 @@ def run(config_path: Path | None = None, host: str = "127.0.0.1", port: int = DE
     """
         Запускает веб-интерфейс. Без файла настроек открывается прошлый сеанс.
         Если сборщик уже запущен — открывает его в браузере; если порт занят другой программой — берёт следующий.
+        Без ffmpeg/ffprobe (нужны для частоты кадров видео) они ставятся автоматически; не удалось — не запускается.
     """
     import uvicorn
 
@@ -550,6 +553,10 @@ def run(config_path: Path | None = None, host: str = "127.0.0.1", port: int = DE
     if free_port != port:
         print(f"Порт {port} занят другой программой, использую {free_port}.")
     port = free_port
+    tools = prepare_video_tools(app_dir() / VIDEO_TOOLS_DIR, on_status=print)
+    if not tools.success:
+        print(f"Не удалось подготовить ffmpeg/ffprobe (нужны для частоты кадров видео): {tools.message}")
+        return
     session = WebSession.open(config_path.resolve() if config_path else None)
     app = create_app(session)
     url = f"http://{host}:{port}/"

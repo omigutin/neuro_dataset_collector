@@ -23,6 +23,12 @@ pip install "neuro-dataset-collector[web,opencv]"
 
 `opencv` / `headless` — если OpenCV ещё не установлен; `web` — веб-интерфейс.
 
+Для чтения видео нужны ffmpeg и ffprobe: по ним измеряется настоящая частота кадров (библиотека
+[true_fps](https://github.com/omigutin/true_fps)). `ndc collect` и веб-интерфейс ищут их в папке программы
+(`tools`), затем в PATH; если не нашли — в Windows скачивают и ставят сами (нужен интернет), в Linux/macOS
+просят поставить ffmpeg пакетным менеджером. В своей программе вызовите `prepare_video_tools(папка)` из
+`neuro_dataset_collector.sources` до чтения видео, иначе ffprobe берётся из PATH.
+
 ## Быстро
 
 ```bash

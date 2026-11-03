@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,8 @@ def make_frame(seed: int, index: int | None = None, source: str = "video1", fps:
 def write_video(path: Path, frames: int = 12) -> Path:
     """ Короткое видео 64×48 со случайными кадрами. """
     cv2 = pytest.importorskip("cv2")
+    if shutil.which("ffprobe") is None:
+        pytest.skip("ffprobe is required to read videos")
     writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 10.0, (64, 48))
     for i in range(frames):
         writer.write(random_image(i))

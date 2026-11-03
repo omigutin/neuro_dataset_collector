@@ -19,7 +19,9 @@ from ..predictors.base import create_predictor
 from ..regions.markup import uses_video_markup, with_video_markup
 from ..review.sync import sync_collection
 from ..sources.video import list_videos
+from ..sources.video_tools import VIDEO_TOOLS_DIR, prepare_video_tools
 from ..web import DEFAULT_PORT
+from ..web.state import app_dir
 
 __all__ = ["main"]
 
@@ -48,6 +50,14 @@ def _print_video(path: Path, number: int, total: int) -> None:
     print(f"[{number}/{total}] {path.name}")
 
 
+def _video_tools_ready() -> bool:
+    """ ffmpeg и ffprobe найдены или установлены; иначе печатает причину. """
+    result = prepare_video_tools(app_dir() / VIDEO_TOOLS_DIR, on_status=print)
+    if not result.success:
+        print(f"Не удалось подготовить ffmpeg/ffprobe (нужны для частоты кадров видео): {result.message}")
+    return result.success
+
+
 def _cmd_collect(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     if args.source:
@@ -56,6 +66,8 @@ def _cmd_collect(args: argparse.Namespace) -> int:
         print("Не задано видео: укажите --source или source.path в настройках.")
         return 1
     videos = list_videos(config.source.path, config.source.extensions, config.source.recursive)
+    if not _video_tools_ready():
+        return 1
     predictor = create_predictor(config.model, config.task)
     # Один сборщик на все видео, если у них общая папка и общая разметка; иначе — свой сборщик на каждое видео
     if config.catalog.next_to_video or uses_video_markup(config.regions):
