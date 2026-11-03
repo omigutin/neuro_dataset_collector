@@ -1588,6 +1588,22 @@ files = [
 ]
 
 [[package]]
+name = "true-fps"
+version = "0.2.0"
+description = "Измерение FPS видео по временным меткам ffprobe и автоустановка ffmpeg/ffprobe"
+optional = false
+python-versions = ">=3.10,<4.0"
+groups = ["main"]
+files = []
+develop = false
+
+[package.source]
+type = "git"
+url = "https://github.com/omigutin/true_fps.git"
+reference = "main"
+resolved_reference = "eb7b4bc1fb83ea3b5af34696229303c5e0c1ef5b"
+
+[[package]]
 name = "types-pyyaml"
 version = "6.0.12.20260906"
 description = "Typing stubs for PyYAML"
@@ -1655,4 +1671,4 @@ web = ["fastapi", "jinja2", "send2trash", "uvicorn"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<4.0"
-content-hash = "893a5d259c7c4ff86f5a73b222c3c5dea6f4709ca29cadefa42410500d499b27"
+content-hash = "9b85b10f220ee0a3ea72a561a88d4c25b9cbf4f2646cf578eb3fa09250f1e445"
